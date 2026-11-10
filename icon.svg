@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="dsh-chronicle">
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#23252a"/>
+  <!-- 卷册：左轴 + 纸面 -->
+  <rect x="12" y="11" width="5" height="42" rx="2.5" fill="#5b4636"/>
+  <rect x="18" y="11" width="31" height="42" rx="4" fill="#f2e8d5"/>
+  <rect x="18" y="11" width="31" height="42" rx="4" fill="none" stroke="#c8452f" stroke-opacity="0.18" stroke-width="1.2"/>
+  <!-- 逐日记录的三条纹 -->
+  <g fill="#8a7154">
+    <rect x="23" y="20" width="17" height="2.6" rx="1.3"/>
+    <rect x="23" y="27" width="21" height="2.6" rx="1.3"/>
+    <rect x="23" y="34" width="14" height="2.6" rx="1.3"/>
+  </g>
+  <!-- 重要性星标：一眼看出"按重要度排序" -->
+  <path d="M43.4 39.2l1.5 3.1 3.4.5-2.5 2.4.6 3.4-3-1.6-3 1.6.6-3.4-2.5-2.4 3.4-.5z" fill="#e8a33d"/>
+  <!-- 轴头束带 -->
+  <rect x="9" y="9" width="11" height="4" rx="2" fill="#7a5c46"/>
+</svg>
