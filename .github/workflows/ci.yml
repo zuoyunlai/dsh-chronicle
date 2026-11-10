@@ -58,13 +58,17 @@ jobs:
       - name: 打包并自检内容
         run: |
           set -e
-          npm pack --pack-destination /tmp
-          TGZ=$(ls /tmp/dsh-chronicle-*.tgz)
+          # 走和 publish.yml release 作业完全相同的路径，
+          # 这样「dist 目录不存在」这类只在 CI 暴露的问题在 push 阶段就被抓住
+          mkdir -p dist
+          npm pack --pack-destination dist
+          TGZ=$(ls dist/dsh-chronicle-*.tgz)
           echo "== 顶层 =="
           tar -tzf "$TGZ" | sed 's|^package/||' | cut -d/ -f1 | sort -u
           tar -tzf "$TGZ" | grep -q '^package/tests/' && { echo "::error::测试目录不该进包"; exit 1; }
           tar -tzf "$TGZ" | grep -qE '^package/(chronicle|entities|facts)/' && { echo "::error::数据目录混进包了"; exit 1; }
           echo "tarball 干净"
+          cp "$TGZ" /tmp/
 
       - name: 解包后独立导入（证明不依赖仓库里的残余文件）
         run: |

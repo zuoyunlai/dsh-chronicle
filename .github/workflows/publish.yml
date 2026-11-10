@@ -140,7 +140,11 @@ jobs:
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: 打包
-        run: npm pack --pack-destination dist
+        # --pack-destination 的目录必须已存在，否则 npm 报 ENOENT
+        # （本地测的时候用的是 /tmp，本来就存在，所以 CI 才暴露出来）
+        run: |
+          mkdir -p dist
+          npm pack --pack-destination dist
 
       - name: 建 Release（幂等：已存在则只补资产）
         env:
