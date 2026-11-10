@@ -19,6 +19,8 @@ import { redactText } from '../lib/redact.js'
 import { catchUpDays, closeDecision, isValidCloseAt } from '../lib/time.js'
 import { detectSupersedes, hasOppositeMarkers } from '../lib/supersede.js'
 import { previousDay } from '../lib/close.js'
+import { pickEntityPages, entitySlug, renderEntityPage } from '../lib/entitypages.js'
+import { closeAnsweredQuestions } from '../lib/supersede.js'
 
 /* ---------- P0-9 围栏正则（我造的 bug） ---------- */
 
@@ -274,4 +276,88 @@ test('closeAt 校验：非法值能被发现', () => {
   assert.equal(isValidCloseAt('24:00'), false)
   assert.equal(isValidCloseAt('bogus'), false)
   assert.equal(isValidCloseAt(''), false)
+})
+
+/* ---------- P1-13 LLM 打分缓存 ---------- */
+
+test('打分缓存：命中缓存不再调模型，ref 集变了则作废', async () => {
+  const { readScoreCache, writeScoreCache } = await import('../lib/scorecache.js')
+  const dataDir = await mkdtemp(join(tmpdir(), 'chronicle-cache-'))
+  try {
+    const entries = [{ ref: 'a#1', title: 'x', importance: 4 }]
+    entries.summary = '这一天的日结，长度足够。'
+    entries.sections = [{ key: 'decisions', title: '结论与决策', refs: ['a#1'] }]
+    await writeScoreCache(dataDir, '2026-11-09', 'v1', entries)
+
+    const hit = await readScoreCache(dataDir, '2026-11-09', 'v1', ['a#1'])
+    assert.ok(hit, 'ref 集一致应命中')
+    assert.equal(hit.summary, '这一天的日结，长度足够。')
+    assert.equal(hit.sections.length, 1)
+
+    const miss = await readScoreCache(dataDir, '2026-11-09', 'v1', ['a#1', 'a#2'])
+    assert.equal(miss, null, 'ref 集变了缓存必须作废（回捞补了新会话）')
+
+    const versionMiss = await readScoreCache(dataDir, '2026-11-09', 'v2', ['a#1'])
+    assert.equal(versionMiss, null, 'prompt 版本变了缓存必须作废')
+  } finally {
+    await rm(dataDir, { recursive: true, force: true })
+  }
+})
+
+/* ---------- P1-1 实体页 ---------- */
+
+test('实体页门槛：on-hit 只给被召回过的建，score 看度数', () => {
+  const nodes = [
+    { name: 'index.js', kind: 'file', degree: 15 },
+    { name: 'api.js', kind: 'file', degree: 3 },
+    { name: '某事实', kind: 'fact', degree: 9 },
+  ]
+  assert.deepEqual(
+    pickEntityPages({ nodes, rule: 'on-hit', hits: { 'api.js': 1 } }).map((n) => n.name),
+    ['api.js'],
+    '事实节点不进实体页（它有自己的 facts/ 页）',
+  )
+  assert.deepEqual(
+    pickEntityPages({ nodes, rule: 'score', minScore: 4, hits: {} }).map((n) => n.name),
+    ['index.js'],
+  )
+})
+
+test('实体页：名字里的非法字符被替换（Obsidian 双链要对上）', () => {
+  assert.equal(entitySlug('a/b:c*d'), 'a-b-c-d')
+  assert.equal(entitySlug('  dsh-chronicle  '), 'dsh-chronicle')
+})
+
+test('实体页：渲染出邻居与相关记录', () => {
+  const md = renderEntityPage({
+    node: { name: 'index.js', kind: 'file', degree: 15 },
+    entries: [{ ref: 'a#1', title: '修路由', importance: 4 }],
+    neighbors: [{ name: 'dsh-chronicle', weight: 5 }],
+    hits: 3,
+  })
+  assert.match(md, /entity: index.js/)
+  assert.ok(md.includes('[[dsh-chronicle]]'), md)
+  assert.match(md, /修路由/)
+})
+
+/* ---------- P1-7 问题生命周期 ---------- */
+
+test('问题生命周期：被后续决策回答了要自动关闭', () => {
+  const facts = [
+    { id: 'q1', kind: 'question', title: '跨工作区怎么汇总', statement: '还没定', bornOn: '2026-11-08', status: 'single' },
+    { id: 'd1', kind: 'decision', title: '跨工作区汇总', statement: '用 sessionQuery 回捞', bornOn: '2026-11-09', status: 'single' },
+  ]
+  const closed = closeAnsweredQuestions(facts)
+  assert.equal(closed, 1)
+  assert.equal(facts[0].status, 'answered')
+  assert.equal(facts[0].answeredBy, 'd1')
+})
+
+test('问题生命周期：答案早于问题不算回答', () => {
+  const facts = [
+    { id: 'q1', kind: 'question', title: '跨工作区怎么汇总', statement: '还没定', bornOn: '2026-11-09', status: 'single' },
+    { id: 'd1', kind: 'decision', title: '跨工作区汇总', statement: '用 sessionQuery 回捞', bornOn: '2026-11-08', status: 'single' },
+  ]
+  assert.equal(closeAnsweredQuestions(facts), 0, '答案不能早于问题')
+  assert.equal(facts[0].status, 'single')
 })

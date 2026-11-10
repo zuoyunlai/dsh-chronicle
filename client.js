@@ -19,7 +19,45 @@ window.__ModuleLoader__.load({
     const { useState, useEffect, useCallback, useRef } = React
 
     const TAG = '[dsh-chronicle]'
-    const VERSION = '1.0.0'
+
+    /**
+     * 面板文案表。
+     *
+     * 为什么自带而不挂宿主 locale：宿主 slot 注册的 locale 参数形状没法从
+     * app.asar 核实（客户端代码已打包），与其猜一个可能不存在的 API，
+     * 不如让插件自己能中英切换 —— 面板里的文字全部走这里。
+     */
+    const I18N = {
+      zh: {
+        recent: '近期', search: '检索', related: '关联', facts: '事实', arcs: '线索', graph: '图谱',
+        loading: T2('loading'), loadingGraph: T2('loadingGraph'), emptyGraph: T2('emptyGraph'),
+        emptyFacts: T2('emptyFacts'),
+        emptyArcs: T2('emptyArcs'),
+        emptyRecent: '还没有记录。', emptySearch: '没命中。换个词，或先收口几天。',
+        factsHint: T2('factsHint'),
+        arcsHint: T2('arcsHint'), graphHint: T2('graphHint'),
+        facts: T2('facts'), arcs: T2('arcs'), legend: '绿=结论与坑 · 黄=项目 · 褐=文件',
+        hint: '滚轮缩放 / 拖背景平移 / 拖节点 / 双击复位',
+        focus: T2('focus'), clear: T2('clear'), error: T2('error'), retry: T2('retry'),
+        title: T2('title'),
+      },
+      en: {
+        recent: 'Recent', search: 'Search', related: 'Related', facts: 'Facts', arcs: 'Threads', graph: 'Graph',
+        loading: 'Loading…', loadingGraph: 'Loading…', emptyGraph: 'No entities yet — close a day first.',
+        emptyFacts: 'Fact library is empty — close a day first.',
+        emptyArcs: 'No cross-day threads yet — a thread needs at least two days.',
+        emptyRecent: 'Nothing recorded yet.', emptySearch: 'No hit. Try other words, or close a few days first.',
+        factsHint: 'Conclusions that do not expire: conventions / decisions / pitfalls',
+        arcsHint: 'Things that took several days', graphHint: 'Entity graph: what shows up together',
+        facts: 'Fact breakdown', arcs: 'Cross-day threads', legend: 'green=conclusions · amber=projects · brown=files',
+        hint: 'wheel=zoom · drag=pan · drag node · double-click=reset',
+        focus: 'Focus: ', clear: 'clear', error: 'Chronicle panel error: ', retry: 'Retry',
+        title: 'Chronicle',
+      },
+    }
+    const isZh = !/^en/i.test(String((typeof navigator !== 'undefined' && navigator.language) || 'zh'))
+    const T2 = (key) => (isZh ? I18N.zh : I18N.en)[key] || key
+    const VERSION = '1.1.0'
     const KIND = 'chronicle'
     const IMPL_ID = 'dsh-chronicle.panel'
 
@@ -427,10 +465,10 @@ window.__ModuleLoader__.load({
       const sim = simRef.current
       if (!sim) {
         // 首帧：仿真还没建好，不是「没有数据」——别显示误导性的空态（审计 P2-17）
-        return h('div', { style: { color: T.faint, fontSize: 12, padding: 12 } }, '载入中…')
+        return h('div', { style: { color: T.faint, fontSize: 12, padding: 12 } }, T2('loadingGraph'))
       }
       if (sim.points.length === 0) {
-        return h('div', { style: { color: T.faint, fontSize: 12, padding: 12 } }, '还没有实体：收口一次之后才会有图。')
+        return h('div', { style: { color: T.faint, fontSize: 12, padding: 12 } }, T2('emptyGraph'))
       }
 
       const toLocal = (event) => {
@@ -465,7 +503,7 @@ window.__ModuleLoader__.load({
                   marginTop: 4,
                 },
               },
-              h('span', null, '聚焦：' + focus),
+              h('span', null, T2('focus') + focus),
               h(
                 'span',
                 {
@@ -473,7 +511,7 @@ window.__ModuleLoader__.load({
                   title: '取消聚焦',
                   style: { cursor: 'pointer', color: T.faint, border: '1px solid ' + T.line, borderRadius: 999, padding: '0 5px' },
                 },
-                '清除',
+                T2('clear'),
               ),
             )
           : null,
@@ -924,12 +962,12 @@ window.__ModuleLoader__.load({
       )
 
       const tabs = [
-        ['recent', '近期'],
-        ['search', '检索'],
-        ['related', '关联'],
-        ['facts', '事实'],
-        ['arcs', '线索'],
-        ['graph', '图谱'],
+        ['recent', T2('recent')],
+        ['search', T2('search')],
+        ['related', T2('related')],
+        ['facts', T2('facts')],
+        ['arcs', T2('arcs')],
+        ['graph', T2('graph')],
       ]
       const summary = state.summary
 
@@ -992,10 +1030,10 @@ window.__ModuleLoader__.load({
                 'div',
                 { style: { color: T.faint, fontSize: 11, padding: '6px 0', flex: '0 0 auto' } },
                 view === 'facts'
-                  ? '不随日期过期的结论：约定 / 决策 / 坑（含判别信号）'
+                  ? T2('factsHint')
                   : view === 'arcs'
-                    ? '同一件事被追了几天'
-                    : '实体关系图：谁和谁一起出现',
+                    ? T2('arcsHint')
+                    : T2('graphHint'),
               )
             : h(
               'form',
@@ -1039,7 +1077,7 @@ window.__ModuleLoader__.load({
           'div',
           { style: { flex: 1, overflowY: 'auto', minHeight: 0, paddingBottom: 8 } },
           state.loading
-            ? h('div', { style: { color: T.faint, fontSize: 12, padding: 12 } }, '读取中…')
+            ? h('div', { style: { color: T.faint, fontSize: 12, padding: 12 } }, T2('loading'))
             : state.error
               ? h(
                   'div',
@@ -1054,11 +1092,11 @@ window.__ModuleLoader__.load({
                     view === 'recent'
                       ? `还没有记录（${summary ? summary.entries : 0} 条）。说一句「收口今天」，或等到 23:50。`
                       : view === 'facts'
-                        ? '事实库还是空的：收口一次之后才会产出。'
+                        ? T2('emptyFacts')
                         : view === 'arcs'
-                          ? '还没有跨天线索：同一件事至少要在两天里出现过。'
+                          ? T2('emptyArcs')
                           : view === 'graph'
-                            ? '还没有实体：收口一次之后才会有图。'
+                            ? T2('emptyGraph')
                           : '没命中。换个词，或先收口几天。',
                   )
                 : view === 'facts'
@@ -1105,7 +1143,7 @@ window.__ModuleLoader__.load({
           return h(
             'div',
             { style: { padding: 12, fontSize: 12, color: T.dim, lineHeight: 1.6 } },
-            h('div', null, '起居注面板出错：'),
+            h('div', null, T2('error')),
             h(
               'div',
               { style: { marginTop: 4, color: T.faint, wordBreak: 'break-all' } },
@@ -1129,7 +1167,7 @@ window.__ModuleLoader__.load({
                   color: T.fg,
                 },
               },
-              '重试',
+              T2('retry'),
             ),
           )
         }
@@ -1160,8 +1198,8 @@ window.__ModuleLoader__.load({
                   kind: KIND,
                   keepMounted: true,
                   priority: 'extension',
-                  title: () => '起居注',
-                  guide: [{ id: KIND, order: 60, title: () => '起居注' }],
+                  title: () => T2('title'),
+                  guide: [{ id: KIND, order: 60, title: () => T2('title') }],
                 }),
               )
             } catch (error) {
@@ -1181,7 +1219,7 @@ window.__ModuleLoader__.load({
                 disposers.push(
                   ctx.slots.inject('sidebar.right.pane.tab.title', () =>
                     ctx.slots.register({ name: 'sidebar.right.pane.tab.title', key }, () =>
-                      h('span', { style: { fontSize: 12 } }, '起居注'),
+                      h('span', { style: { fontSize: 12 } }, T2('title')),
                     ),
                   ),
                 )

@@ -22,6 +22,7 @@ import { loadEntries, loadEdges, searchEntries, buildInjectLine } from './lib/re
 import { createChronicleApi, registerChronicleRoutes } from './lib/api.js'
 import { backfillDay } from './lib/backfill.js'
 import { readFacts, bumpFactHits } from './lib/facts.js'
+import { bumpEntityHits } from './lib/entitypages.js'
 import { reviewCandidates, renderRulesMarkdown } from './lib/rules.js'
 import { readArcs } from './lib/arcs.js'
 import { buildViz } from './lib/viz.js'
@@ -38,6 +39,7 @@ import {
   readMaybe,
 } from './lib/store.js'
 import { createSerializer } from './lib/serialize.js'
+import { TOOL_SCHEMAS } from './lib/schemas.js'
 
 /**
  * schemastery 是**宿主 peer**，不是我们的依赖：
@@ -59,7 +61,7 @@ export const inject = ['tools']
 /** 当前实现阶段。 */
 export const PHASE = 'P6'
 
-const VERSION = '1.0.0'
+const VERSION = '1.1.0'
 
 /** 每攒多少条事件就落一次盘。 */
 const FLUSH_EVENTS = 20
@@ -259,6 +261,7 @@ export function apply(ctx, config) {
         buffer,
         day,
         includeSubagent: Boolean(config.includeSubagent),
+        limit: 1000,
         redact: Boolean(config.redact),
         skipLive,
         startIndex,
@@ -481,6 +484,8 @@ export function apply(ctx, config) {
       floor: config.importanceFloor,
       promptVersion: statePromptVersion(),
       gitCommit: Boolean(config.gitCommit),
+      entityRule: String(config.entityRule || 'on-hit'),
+      entityMinScore: Number(config.entityMinScore) || 4,
       enhance: mode ? makeEnhancer(mode) : enhance,
     }
   }
@@ -554,7 +559,7 @@ export function apply(ctx, config) {
         '宿主服务就绪情况，以及缓冲与收口进度。不读写任何文件。',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
       output: {
-        schema: { type: 'object', properties: {} },
+        schema: TOOL_SCHEMAS.chronicle_ping,
         render(_args, value) {
           const s = value.services || {}
           const marks = Object.entries(s)
@@ -635,7 +640,7 @@ export function apply(ctx, config) {
         additionalProperties: false,
       },
       output: {
-        schema: { type: 'object', properties: {} },
+        schema: TOOL_SCHEMAS.chronicle_close,
         render(_args, value) {
           if (value.dryRun) {
             const top = (value.top || [])
@@ -712,7 +717,7 @@ export function apply(ctx, config) {
         additionalProperties: false,
       },
       output: {
-        schema: { type: 'object', properties: {} },
+        schema: TOOL_SCHEMAS.chronicle_doctor,
         render(_args, value) {
           return [{ type: 'text', text: formatDiagnosis(value) }]
         },
@@ -752,16 +757,31 @@ export function apply(ctx, config) {
     return corpus
   }
 
-  // 常驻注入：只有一行，且当天没记录时是空串（连这一行都不出现）
-  const systemPrompt = optionalService(ctx, 'systemPrompt')
-  if (systemPrompt && typeof systemPrompt.context === 'function') {
+  // 常驻注入：只有一行，且当天没记录时是空串（连这一行都不出现）。
+  // 用 ctx.inject 而不是一次性 ctx.get（审计 P2-19）：systemPrompt 晚到时能自愈。
+  if (typeof ctx.inject === 'function') {
     ctx.effect(() =>
-      systemPrompt.context({
-        name: 'chronicle-hint',
-        order: 900,
-        text: () => injectText,
+      ctx.inject(['systemPrompt'], (injected) => {
+        const service = injected.get('systemPrompt')
+        if (!service || typeof service.context !== 'function') return
+        return service.context({
+          name: 'chronicle-hint',
+          order: 900,
+          text: () => injectText,
+        })
       }),
     )
+  } else {
+    const systemPrompt = optionalService(ctx, 'systemPrompt')
+    if (systemPrompt && typeof systemPrompt.context === 'function') {
+      ctx.effect(() =>
+        systemPrompt.context({
+          name: 'chronicle-hint',
+          order: 900,
+          text: () => injectText,
+        }),
+      )
+    }
   }
 
   // 只读 API：面板与工具共用同一后端（同一函数，不分叉）
@@ -861,7 +881,7 @@ export function apply(ctx, config) {
         additionalProperties: false,
       },
       output: {
-        schema: { type: 'object', properties: {} },
+        schema: TOOL_SCHEMAS.chronicle_today,
         render(_args, value) {
           if (!value.entries || value.entries.length === 0) {
             return [{ type: 'text', text: `${value.day} 没有记录（还没收口，或那天没干活）。` }]
@@ -898,7 +918,7 @@ export function apply(ctx, config) {
         additionalProperties: false,
       },
       output: {
-        schema: { type: 'object', properties: {} },
+        schema: TOOL_SCHEMAS.chronicle_search,
         render(_args, value) {
           if (!value.results || value.results.length === 0) {
             return [{ type: 'text', text: `没命中「${value.query}」。` }]
@@ -918,7 +938,14 @@ export function apply(ctx, config) {
         // 命中即记账：这是判断"这套东西到底有没有用"的唯一指标
         if (results.length > 0) {
           try {
-            await bumpFactHits(dataDir, results.map((item) => item.ref))
+            await bumpFactHits(dataDir, results.map((item) => item.ref), vaultDir)
+            // 记实体命中：entityRule=on-hit 时这是建页的唯一依据（审计 P1-1）
+            const hitNames = new Set()
+            for (const item of results) {
+              for (const name of item.entities || []) hitNames.add(String(name))
+              for (const file of item.files || []) hitNames.add(String(file).split(/[\\/]/).pop())
+            }
+            await bumpEntityHits(dataDir, [...hitNames])
           } catch {
             /* 记账失败不影响检索 */
           }
@@ -944,7 +971,7 @@ export function apply(ctx, config) {
         additionalProperties: false,
       },
       output: {
-        schema: { type: 'object', properties: {} },
+        schema: TOOL_SCHEMAS.chronicle_related,
         render(_args, value) {
           const neighbors = (value.neighbors || []).map((n) => `${n.name}(${n.weight})`).join(' ')
           const lines = (value.entries || []).map((e) => `★${e.importance} ${e.title} · \`${e.ref}\``)
@@ -994,7 +1021,7 @@ export function apply(ctx, config) {
         additionalProperties: false,
       },
       output: {
-        schema: { type: 'object', properties: {} },
+        schema: TOOL_SCHEMAS.chronicle_facts,
         render(_args, value) {
           if (!value.facts || value.facts.length === 0) return [{ type: 'text', text: '事实库还是空的（先收口一次）' }]
           const lines = value.facts.map(
@@ -1040,7 +1067,7 @@ export function apply(ctx, config) {
         additionalProperties: false,
       },
       output: {
-        schema: { type: 'object', properties: {} },
+        schema: TOOL_SCHEMAS.chronicle_review,
         render(_args, value) {
           if (!value.candidates || value.candidates.length === 0) {
             return [{ type: 'text', text: '没有该复核的条目：要么都很新，要么都已被复现验证过。' }]
@@ -1074,7 +1101,7 @@ export function apply(ctx, config) {
         additionalProperties: false,
       },
       output: {
-        schema: { type: 'object', properties: {} },
+        schema: TOOL_SCHEMAS.chronicle_export_rules,
         render(_args, value) {
           return [
             {
@@ -1089,7 +1116,8 @@ export function apply(ctx, config) {
         const generatedAt = dayKey(Date.now())
         const markdown = renderRulesMarkdown(facts, { generatedAt })
         let path = ''
-        if (args?.write === true) {
+        // write 默认开：闭环的产物必须真的落盘，否则「规则导出」只是屏幕上的字
+        if (args?.write !== false) {
           path = join(vaultDir, 'AGENTS.generated.md')
           await writeAtomic(path, markdown)
         }
@@ -1109,7 +1137,7 @@ export function apply(ctx, config) {
         additionalProperties: false,
       },
       output: {
-        schema: { type: 'object', properties: {} },
+        schema: TOOL_SCHEMAS.chronicle_capsule,
         render(_args, value) {
           return [{ type: 'text', text: `已存入 ${value.path}（${value.day}）` }]
         },
