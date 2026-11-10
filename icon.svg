@@ -1,33 +1,39 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="dsh-chronicle 起居注">
   <title>dsh-chronicle</title>
   <!--
-    起居注 = 帝王逐日记录。图形取三样：卷册（记录）、逐日条目（每天一条）、朱印（官修）。
+    图形取自用户提供的 起居注.svg（三片竹简：竹色 #B39B77 + 米色书列 #F1E7D4）。
+    这里只做两处**非破坏性**适配，图形语言未改：
 
-    ## 设计约束：必须在 16px 下活着
-    侧栏标签可能是 16px。64 单位 viewBox 渲染到 16px 时，1 单位 = 0.25px，
-    所以凡是小于 6 单位（1.5px）的东西都会糊。据此定的线：
-      · 卷轴轴 8 单位 = 2.00px  ✅
-      · 条目一条 8 单位高 = 2.00px ✅（原来两条 4 单位只 1px，且间隙 1.25px，必糊）
-      · 朱印 13 单位 = 3.25px  ✅
-    16px 下能读出来的就三层：米色纸 + 深棕书脊 + 红印。这就够了。
-    更大尺寸（24/32/96px）才看得到纸的圆角与印里的小横线。
+    ① 套上生态约定的内缩圆角底（x=4 y=4 w=56 rx=14）
+       —— dsh-theme-palette / dsh-rightbar-quicknav 等已装插件都是这个规格。
+       裸图在浅色底上（#B39B77 on #F5F6F8）对比度偏低，且图标边缘没有边界。
 
-    ## 底色
-    #2E3138 比侧栏深色底 #23252A / #1B1D21 更亮一点，否则图标边缘和背景分不开。
+    ② 竖片间隙 6.24% → 9.6%（原 30.09/482 单位）
+       原间隙在 16px 下只有 1.0px，三片会并成一块。现在是 1.5px，分得开。
+       代价：每片从 141.54 收窄到 12.67/64 ≈ 视觉上略瘦，三片节奏不变。
+
+    其余全部按原图比例：书列宽 = 竖片宽的 37.6%，
+    小横列位置 = 原图的 73.8% 与 83.4% 处。
   -->
-  <rect width="64" height="64" rx="15" fill="#2E3138"/>
+  <rect x="4" y="4" width="56" height="56" rx="14" fill="#2E3138"/>
 
-  <!-- 卷轴左轴（书脊） -->
-  <rect x="9" y="10" width="8" height="44" rx="4" fill="#5B4636"/>
+  <g>
+    <!-- 第 1 片 -->
+    <rect x="7" y="6" width="12.67" height="52" rx="1.4" fill="#B39B77"/>
+    <rect x="10.78" y="11.1" width="4.76" height="25.5" fill="#F1E7D4"/>
+    <rect x="10.78" y="44.4" width="4.76" height="2.9" fill="#F1E7D4"/>
+    <rect x="10.78" y="49.4" width="4.76" height="2.9" fill="#F1E7D4"/>
 
-  <!-- 纸面 -->
-  <rect x="17" y="10" width="34" height="44" rx="4" fill="#F2E8D5"/>
+    <!-- 第 2 片 -->
+    <rect x="25.67" y="6" width="12.67" height="52" rx="1.4" fill="#B39B77"/>
+    <rect x="29.45" y="11.1" width="4.76" height="25.5" fill="#F1E7D4"/>
+    <rect x="29.45" y="44.4" width="4.76" height="2.9" fill="#F1E7D4"/>
+    <rect x="29.45" y="49.4" width="4.76" height="2.9" fill="#F1E7D4"/>
 
-  <!-- 逐日条目：只留一条，保证 2px -->
-  <rect x="24" y="19" width="20" height="8" rx="4" fill="#8A7154"/>
-
-  <!-- 朱印：官修记录的印记，也是唯一的暖色锚点 -->
-  <rect x="34" y="34" width="13" height="13" rx="3" fill="#C8452F"/>
-  <rect x="38" y="38.6" width="5" height="2" rx="1" fill="#F2E8D5" fill-opacity="0.95"/>
-  <rect x="38" y="42.4" width="3" height="2" rx="1" fill="#F2E8D5" fill-opacity="0.95"/>
+    <!-- 第 3 片 -->
+    <rect x="44.33" y="6" width="12.67" height="52" rx="1.4" fill="#B39B77"/>
+    <rect x="48.11" y="11.1" width="4.76" height="25.5" fill="#F1E7D4"/>
+    <rect x="48.11" y="44.4" width="4.76" height="2.9" fill="#F1E7D4"/>
+    <rect x="48.11" y="49.4" width="4.76" height="2.9" fill="#F1E7D4"/>
+  </g>
 </svg>
