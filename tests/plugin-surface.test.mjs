@@ -82,10 +82,11 @@ test('导出齐全', () => {
 test('Config 默认值等于已定稿的决议', () => {
   assert.ok(plugin.Config, 'Config 应当有 schema（仓库内 devDependency 已装）')
   const config = plugin.Config({})
-  assert.equal(Object.keys(config).length, 18, '移除 closeAt 后应为 18 项')
+  assert.equal(Object.keys(config).length, 19, '移除 closeAt、加 uiLocale 后应为 19 项')
   assert.equal(config.scoring, 'rule', 'P2 默认必须走规则档，LLM 要显式打开')
   // closeAt 已移除（方案 B）：收口挂在自然日边界，不再有固定时刻
   assert.equal(config.closeAt, undefined, 'closeAt 应从配置里移除')
+  assert.equal(config.uiLocale, 'auto', '界面语言默认跟随宿主')
   assert.equal(config.gitCommit, true)
   assert.equal(config.entityRule, 'on-hit')
   assert.equal(config.panel, true)

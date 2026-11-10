@@ -1,5 +1,65 @@
 # CHANGELOG
 
+## 2.1.0 — 2026-11-10
+
+按 **DSH ENTRY 规范**做合规整改。用官方检查器跑出来的结论：
+
+```
+dsh-standards 1.6.9 · --scope entry --host-version 0.2.2-rc.1
+Status: pass (exit 0) · Level: DSH-ENTRY recognized
+blocking 0 · declared fields 5/5 · coverage 12/14
+```
+
+改前：`declared fields 1/5`、hygiene 3。改后：`5/5`、hygiene 1（唯一那条已按规范文档化）。
+
+### 真 bug：模块作用域有 top-level await（DSC-10）
+
+```js
+const Schema = await import('@deepseek-ai/schemastery')  // ← 违规
+```
+
+它让每个 importer 的求值都等一次，宿主也没法挂清理钩子。规范 C-10 明确禁止。
+改成同步 `createRequire`——schemastery 是 CJS/ESM 双入口，`require` 拿得到。
+
+已验证**降级路径仍然有效**：在没有 schemastery 的环境里 import，插件照常加载、
+10 个工具照常注册，只是没有 `Config`（无设置页）。
+
+### 补齐 manifest 声明（5/5）
+
+| 字段 | 改动 |
+|---|---|
+| `engines.dsh` | `">=0.2.1-rc.1"` → `">=0.2.2-0 <0.3.0"`（原来没有上界，未来 0.3 也会被认作兼容） |
+| `peerDependencies["@deepseek-ai/dsh"]` | 新增，与 engines 同一区间（读 peer 的工具也要能看到） |
+| `dsh.capabilities` | 新增：`tools:register`、`sessions:read`、`system-prompt:write`、`fs:read`、`network:egress` |
+| `dsh.labels` | 新增 `prompt-modification`（因为确实往系统提示里追加内容） |
+| `dsh.commitments` | 新增 9 条，逐条按代码事实填 |
+| `dsh.disclosure` | 新增：`endpoints: []` / 保留策略 / 注入内容说明 |
+
+剩下那条 WARN（C-11.5）是「`sessions:read` 与 `system-prompt:write` 静态扫不到」——
+因为我用 `ctx.inject([...], injected => injected.get(...))` 拿服务，不是直接写
+`ctx.systemPrompt.x()`。**声明是准确的，属于扫描器的静态边界**，已按规范要求在 README 说明。
+
+### 国际化（中英双语 + 可覆盖）
+
+- `locale/en.json` + `locale/zh.json`（市场列表的标题与描述），格式与生态一致
+- 面板 UI 有完整的 zh/en 文案表；新增测试断言**两侧键集完全一致**（漏一个键就会在英文界面露出中文）
+- 语言检测原来是 `navigator.language` 一把梭，现在三级优先：
+  **配置 `uiLocale` → `document.documentElement.lang` → `navigator.language`**
+- 新增配置项 `uiLocale`（`auto` / `zh` / `en`），由 `/chronicle/api/summary` 下发给面板
+- 修了一个真设计问题：`setLocale` 原来只在 `load()` 里调用，**切视图重渲染就丢了**；改成渲染期从 state 同步
+
+### README 补齐官方 checklist 要求的四节
+
+原来只有「安装 / 工具 / 面板 / 数据 / 边界」，缺 **权限**、**配置**、**升级与卸载**、**常见问题**。
+新增后共 8 个可查章节。权限一节写清 5 项能力、6 条不做的事、注入内容与保留策略。
+
+### 其他
+
+- GitHub 仓库加 topic：`dsh-plugin`、`deepseek-harness`、`chronicle`、`obsidian`
+- README 里的「推荐」改为「装法」（避免被读成背书声明）
+
+### 162 条测试全绿（新增 2 条：中英切换、auto 回落）
+
 ## 2.0.6 — 2026-11-10
 
 **图标换成用户提供的「三片竹简」**（`source-起居注.svg`，CorelDRAW 导出，原文件保留在 `docs/brand/`）。

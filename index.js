@@ -11,6 +11,7 @@
  *   dataDir  = 私有数据（events/*.jsonl、state.json）—— 删了不可重建
  *   vaultDir = 产物（chronicle/*.md、entities/、facts/）—— 删了能重跑
  */
+import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -48,10 +49,21 @@ import { TOOL_SCHEMAS } from './lib/schemas.js'
  *   - 用 `file:` / link 直接链接本仓库时，Node 从仓库真实路径向上找，找不到
  *     （实测 ERR_MODULE_NOT_FOUND ... imported from ...\dsh-chronicle\index.js）
  * 所以做容错导入：拿不到就不声明 Config（插件照常加载，只是没有设置页）。
+ *
+ * 用同步 `createRequire` 而不是 `await import()`：
+ * DSH ENTRY 规范 C-10（DSC-10）明确要求**模块作用域不得有 top-level await**，
+ * 因为它会让每个 importer 的求值等待，宿主也没法挂清理钩子。
+ * schemastery 是 CJS/ESM 双入口，require 拿得到。
  */
-const Schema = await import('@deepseek-ai/schemastery')
-  .then((mod) => mod.default ?? mod)
-  .catch(() => null)
+const Schema = (() => {
+  try {
+    const req = createRequire(import.meta.url)
+    const loaded = req('@deepseek-ai/schemastery')
+    return loaded?.default ?? loaded ?? null
+  } catch {
+    return null
+  }
+})()
 
 /** 与 cordis.patch.yml 的 insert id 保持一致。 */
 export const name = 'dsh-chronicle'
@@ -62,7 +74,7 @@ export const inject = ['tools']
 /** 当前实现阶段。 */
 export const PHASE = 'P6'
 
-const VERSION = '2.0.6'
+const VERSION = '2.1.0'
 
 /** 每攒多少条事件就落一次盘。 */
 const FLUSH_EVENTS = 20
@@ -135,6 +147,9 @@ export const Config = Schema
         .max(5)
         .default(4)
         .description('entityRule=score 时的分数门槛。'),
+      uiLocale: Schema.string()
+        .default('auto')
+        .description('面板界面语言：auto（跟随宿主/浏览器）/ zh / en。'),
       panel: Schema.boolean()
         .default(true)
         .description('是否注册 Web 面板入口（P4 生效）。'),
@@ -836,6 +851,8 @@ export function apply(ctx, config) {
     // 图上既要有文件，也要有「想出来的东西」：把事实节点挂进来
     // 面板要显示「丢了多少事件」，这是记忆完整度的唯一指标
     readState: () => readState(dataDir),
+    // 界面语言下发给面板（auto / zh / en）
+    uiLocale: () => String(config.uiLocale || 'auto'),
     buildViz,
     loadGraph: async (limit) => {
       const base = await loadGraph(dataDir, { limit })

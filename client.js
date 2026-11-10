@@ -59,9 +59,50 @@ window.__ModuleLoader__.load({
         title: 'Chronicle',
       },
     }
-    const isZh = !/^en/i.test(String((typeof navigator !== 'undefined' && navigator.language) || 'zh'))
-    const T2 = (key) => (isZh ? I18N.zh : I18N.en)[key] || key
-    const VERSION = '2.0.6'
+    /**
+     * 界面语言。
+     *
+     * 检测顺序（都失败就中文）：
+     *   1. 宿主注入的 getPreference('uiLocale')（用户在插件设置里手动选）
+     *   2. document.documentElement.lang（宿主的界面语言会写在这里）
+     *   3. navigator.language（兜底）
+     *
+     * 为什么不用宿主的 locale 服务：客户端代码在 app.asar 里是打包过的，
+     * 核实不到那个服务的真实形状。与其猜一个可能不存在的 API，
+     * 不如用标准 DOM + 一个可手动覆盖的配置项。
+     */
+    function preferredLocale(getPreference) {
+      try {
+        const pinned = typeof getPreference === 'function' ? getPreference('uiLocale') : ''
+        if (/^en/i.test(String(pinned))) return 'en'
+        if (/^zh/i.test(String(pinned))) return 'zh'
+      } catch {
+        /* 拿不到就往下走 */
+      }
+      const docLang = typeof document !== 'undefined' && document.documentElement && document.documentElement.lang
+      if (docLang) return /^en/i.test(String(docLang)) ? 'en' : 'zh'
+      const nav = typeof navigator !== 'undefined' ? navigator.language : ''
+      return /^en/i.test(String(nav || '')) ? 'en' : 'zh'
+    }
+
+    let currentLocale = preferredLocale()
+
+    /** 设置页改了语言时调用（由宿主配置推下来）。 */
+    function setLocale(next) {
+      if (next === 'zh' || next === 'en') {
+        currentLocale = next
+        return true
+      }
+      if (next === 'auto' || !next) {
+        currentLocale = preferredLocale()
+        return true
+      }
+      return false
+    }
+
+    const isZh = () => currentLocale === 'zh'
+    const T2 = (key) => (currentLocale === 'zh' ? I18N.zh : I18N.en)[key] || key
+    const VERSION = '2.1.0'
     const KIND = 'chronicle'
     const IMPL_ID = 'dsh-chronicle.panel'
 
@@ -985,6 +1026,11 @@ window.__ModuleLoader__.load({
       // 从图谱点进「事实」时高亮那一条
       const [highlight, setHighlight] = useState('')
       const seq = useRef(0)
+      // 渲染期同步语言：state.summary.uiLocale 由宿主下发。
+      // 不能只在 load() 里 setLocale —— 重渲染时（比如切视图）就拿不到了。
+      if (state.summary && (state.summary.uiLocale === 'zh' || state.summary.uiLocale === 'en')) {
+        currentLocale = state.summary.uiLocale
+      }
 
       // 图谱 → 视图：绿点（事实）去事实库定位，褐点/黄点（文件/项目）去检索
       const nodeClick = useCallback((name, kind) => {
@@ -1035,6 +1081,8 @@ window.__ModuleLoader__.load({
             entries = data.results || data.entries || []
           }
           if (mine !== seq.current) return
+          // 宿主下发的界面语言优先于自动检测（'auto' 时保持检测结果）
+          if (summary && typeof summary.uiLocale === 'string' && summary.uiLocale !== 'auto') setLocale(summary.uiLocale)
           setState({ loading: false, error: '', entries, summary, view: view2, dayList })
         } catch (error) {
           if (mine !== seq.current) return

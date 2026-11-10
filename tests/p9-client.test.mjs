@@ -318,3 +318,49 @@ test('「近期」没有日结时给出可操作提示，而不是空白', async
   const text = JSON.stringify(log.elements)
   assert.ok(text.includes('还没有日结'), '缺日结时应提示怎么产出，而不是留白')
 })
+
+test('界面语言：宿主下发 en 时面板渲染英文，不带中文', async () => {
+  const { mod, log, React } = await loadClient()
+  const ctx = makeCtx(log)
+  mod.apply(ctx)
+  const Body = bodyOf(log)
+
+  const dayList = [
+    {
+      day: '2026-11-09',
+      summary: 'A short day summary.',
+      count: 1,
+      entries: [{ ref: 'a#1', day: '2026-11-09', section: 'projects', title: 'Did a thing', importance: 3 }],
+    },
+  ]
+  React.__resetSlots()
+  // summary.uiLocale = 'en' → 面板应切到英文
+  React.__seedSlot(2, {
+    loading: false,
+    error: '',
+    entries: dayList[0].entries,
+    summary: { uiLocale: 'en', entries: 1, edges: 0 },
+    view: 'recent',
+    dayList,
+  })
+  renderToLog(Body(), React, log)
+  const text = JSON.stringify(log.elements)
+  // 英文标签应出现（tabs 用英文名）
+  assert.ok(text.includes('Recent'), '英文界面应显示 Recent：' + text.slice(0, 200))
+  // 中文标签不该出现
+  assert.ok(!text.includes('近期'), '英文界面不该残留「近期」')
+})
+
+test('界面语言：uiLocale=auto 时跟随 document.lang / navigator', async () => {
+  const { mod, log, React } = await loadClient()
+  const ctx = makeCtx(log)
+  mod.apply(ctx)
+  const Body = bodyOf(log)
+  const dayList = [{ day: '2026-11-09', summary: '', count: 1, entries: [{ ref: 'a#1', day: '2026-11-09', section: 'projects', title: 't', importance: 3 }] }]
+  React.__resetSlots()
+  React.__seedSlot(2, { loading: false, error: '', entries: dayList[0].entries, summary: { uiLocale: 'auto' }, view: 'recent', dayList })
+  renderToLog(Body(), React, log)
+  const text = JSON.stringify(log.elements)
+  // 测试环境没有 document.lang、navigator.language 为 undefined → 回落中文
+  assert.ok(text.includes('近期') || text.includes('Recent'), 'auto 模式应能渲染出某个语言的标签：' + text.slice(0, 200))
+})

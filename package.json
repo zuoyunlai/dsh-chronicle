@@ -1,6 +1,6 @@
 {
   "name": "dsh-chronicle",
-  "version": "2.0.6",
+  "version": "2.1.0",
   "description": "起居注：把 DeepSeek Harness 里的对话收口成可审、可检索、可关联的 Markdown 编年史 + 事实库。零第三方依赖，产物是 Obsidian 可直接打开的独立 vault。",
   "type": "module",
   "main": "index.js",
@@ -30,6 +30,7 @@
   "dependencies": {},
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.0",
+    "@deepseek-ai/dsh": ">=0.2.2-0 <0.3.0",
     "@deepseek-ai/schemastery": "^3.18.2",
     "@deepseek-ai/dsh-client-ui-sidebar-right": "^0.2.1-rc.1",
     "react": ">=18.2.0"
@@ -53,7 +54,7 @@
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0",
-    "dsh": ">=0.2.1-rc.1"
+    "dsh": ">=0.2.2-0 <0.3.0"
   },
   "dsh": {
     "bundle": {
@@ -66,6 +67,32 @@
         "@deepseek-ai/dsh-client-ui-sidebar-right",
         "@deepseek-ai/dsh-client-ui-slots"
       ]
+    },
+    "capabilities": [
+      "tools:register",
+      "sessions:read",
+      "system-prompt:write",
+      "fs:read",
+      "network:egress"
+    ],
+    "labels": [
+      "prompt-modification"
+    ],
+    "commitments": {
+      "no-session-upload": true,
+      "no-third-party-proxy": true,
+      "no-credential-enumeration": true,
+      "no-silent-prompt-rewrite": true,
+      "no-adapter-bypass": true,
+      "no-webhook-auto-session": true,
+      "no-security-seam-replacement": true,
+      "third-party-endpoint-disclosure": true,
+      "no-danger-full-access": true
+    },
+    "disclosure": {
+      "endpoints": [],
+      "retention": "全部留在本机。事件在 ~/.dsh/dsh-chronicle，产物在 vault 目录（默认 ~/dsh-chronicle-vault）。插件不自动上传、不自动删除；清理由用户自己动手。",
+      "systemPrompt": "常驻注入一行，≤ injectBudget 字符（默认 80）。内容：当天条目数 + 一条与你正在做的事相关的「约定」 + 一个「该避的坑」。没有记录时整行不出现。"
     }
   },
   "keywords": [

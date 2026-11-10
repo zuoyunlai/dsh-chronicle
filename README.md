@@ -15,9 +15,9 @@
 
 产物是一个独立的 Obsidian vault，**零第三方依赖**——`dependencies` 为空，只声明宿主自带的 `@deepseek-ai/*`。
 
-> **状态：v2.0.6**（P6）
+> **状态：v2.1.0**（P6）
 > 采集 → 回捞 → 纲要 → 规则/LLM 打分 → **日结 + 七块** → 周文件 → 按天时间轴 → 实体图与实体页 → 事实库 → 跨天线索 → 规则导出 → 右侧栏面板。
-> 160 条测试全绿。
+> 162 条测试全绿。
 
 ---
 
@@ -56,7 +56,7 @@
 
 ## 安装
 
-**推荐：在 DSH 的「设置 → 插件」里搜索 `dsh-chronicle` 安装。** 插件管理会同时做三件事：
+**装法：在 DSH 的「设置 → 插件」里搜索 `dsh-chronicle` 安装。** 插件管理会同时做三件事：
 装依赖、加进 `dsh.profile.bundles`、应用包内的 `cordis.patch.yml`。
 
 命令行等价物：
@@ -111,7 +111,137 @@ dsh plugin --profile <你的 profile> add dsh-chronicle
 
 ---
 
+## 权限（它能做什么 / 不能做什么）
+
+插件在 `package.json` 的 `dsh.capabilities` 里声明了它用到的宿主面：
+
+| 能力 | 用在哪 |
+|---|---|
+| `tools:register` | 注册 10 个 `chronicle_*` 工具 |
+| `sessions:read` | 后台回捞读历史会话（只读，不改写任何会话） |
+| `system-prompt:write` | 往系统提示里追加**一行**摘要（见下方披露） |
+| `fs:read` | 读自己的数据目录 |
+| `network:egress` | 面板客户端 `fetch` 同源的 `/chronicle/api/*` |
+
+`dsh.labels` 标了 `prompt-modification`——因为确实会动系统提示。
+
+### 它不做的事（`dsh.commitments` 里逐条声明）
+
+- **不上传会话**：所有内容只写本机 `events/*.jsonl`
+- **不经过第三方中转**：没有第三方端点（`disclosure.endpoints` 为空数组）
+- **不读凭据**：从不碰 `ctx.credentials`
+- **不静默改改写提示**：只追加一个登记过的 context 块，见下方披露
+- **不注册 LLM adapter / webhook**，**不接管** shell / credentials / sandbox 这些安全缝
+- **不硬编码沙箱绕过**
+
+### 往你的提示里注入了什么（`dsh.disclosure.systemPrompt`）
+
+常驻**一行**，不超过 `injectBudget` 字符（默认 80）：
+
+```
+[chronicle] 今天 12 条 · 一条约定与一个待避的坑
+```
+
+内容 = 当天条目数 + 一条与你当正在做的事相关的「约定」 + 一个「该避的坑」。
+当天没有记录时**整行不出现**。关掉：配置里 `injectLine: false`。
+
+### 数据保留（`dsh.disclosure.retention`）
+
+全部留在本机，插件不自动上传、**也不自动删除**。清理要你自己动手。
+
+---
+
+## 配置
+
+18 项，在「设置 → 插件 → 起居注」里改。常用的：
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `vaultDir` | `~/dsh-chronicle-vault` | 产物目录，Obsidian 直接打开这层 |
+| `dataDir` | `$DSH_HOME/dsh-chronicle` | 私有数据；留空即默认 |
+| `tickMinutes` | `5` | 轮询间隔。只判断「该不该收口」 |
+| `importanceFloor` | `3` | 低于这个星级折叠进附录 |
+| `scoring` | `rule` | `rule` 不调模型但没有日结；`llm` 才有日结 |
+| `followModel` | `true` | 打分跟随当前选中模型 |
+| `scoringModel` | 空 | 固定打分模型，形如 `provider/model`；仅 `followModel=false` 时生效 |
+| `gitCommit` | `true` | 收口后对 vault 做本地 commit（**只 commit 不 push**） |
+| `injectLine` | `true` | 是否注入那一行摘要 |
+| `injectBudget` | `80` | 注入行的字符上限 |
+| `redact` | `true` | 落盘前脱敏凭据 |
+| `maxEventsPerDay` | `5000` | 单日事件上限，超出会计数并报出 |
+| `entityRule` | `on-hit` | 实体页门槛：`on-hit` / `score` / `always` |
+| `uiLocale` | `auto` | 面板语言：`auto` / `zh` / `en` |
+| `weekFile` | `true` | 按周一个文件；关掉退回按天（一年 365 个文件会拖垮 Obsidian） |
+| `includeSubagent` | `false` | 是否收录子代理会话 |
+
+完整清单见 `chronicle_ping` 输出或设置页。
+
+---
+
+## 升级与卸载
+
+**升级**（在 DSH 的「设置 → 插件」里点更新，或命令行）：
+
+```bash
+dsh plugin --profile <profile> add dsh-chronicle@latest
+```
+
+升级**不动你的数据**：`dataDir` 与 `vaultDir` 都在插件目录之外，换版本不影响。
+装完重启该 profile 的进程。
+
+**卸载**：
+
+```bash
+dsh plugin --profile <profile> remove dsh-chronicle
+```
+
+卸载**不会**删你的数据与产物。要彻底清掉，手动删这两个目录：
+
+```bash
+rm -rf ~/.dsh/dsh-chronicle ~/dsh-chronicle-vault
+```
+
+> 卸载前建议先跑一次 `chronicle_ping` 确认数据目录在哪——`dataDir` 可能被改过。
+
+---
+
+## 常见问题
+
+**工具全消失，但设置页里还看得到插件**
+最常见的原因是「装了但没启用」。`dsh plugin ... add` 只把包装进 profile，
+不会加进 `dsh.profile.bundles`。去「设置 → 插件」把它打开，再重启进程。
+
+**面板空白 / 404**
+先跑 `chronicle_ping` 看「面板 API 已注册 N 条」。0 条说明路由没注册上，
+重启一次；仍然 0 条就把 `chronicle_ping` 的输出发出来。
+
+**日结是空的**
+默认档位 `scoring: 'rule'` **不产日结**（不调模型，只做机械打分）。
+要日结就把它改成 `llm`，或收口时指定：`chronicle_close { "day": "2026-11-09", "scoring": "llm" }`。
+
+**今天怎么还没有记录**
+收口在**跨过午夜后**收「上一个自然日」，不收今天——因为只有过了 00:00，
+「这一天过完了吗」才有确定答案。今天的数据在 `chronicle_ping` 的「今日 N 条」里看得到。
+
+**电脑关着，那天的日结会丢吗**
+不会。下次启动第一件事就是补收，与关了几小时无关。一次最多补 30 天；
+更早的会在 `chronicle_ping` 的 `catchUpDropped` 里列出来。
+
+**事件被丢了（`dropped` 不为 0）**
+单日超过 `maxEventsPerDay`（默认 5000）。调大它，或看 `chronicle_doctor` 的分布确认是不是异常。
+
+**收了口但某个会话没进**
+那个会话的正文可能超时被跳过了。`chronicle_doctor` 会报；也可以等后台回捞补，
+补完后若事件文件变了，下次 tick 会自动重收，并在 ping 的 `revisited` 里列出。
+
+---
+
 ## 已知边界
+
+- **两个能力是动态获取的**：`system-prompt:write` 与 `sessions:read` 通过
+  `ctx.inject([...], injected => injected.get(...))` 拿服务，不是直接写 `ctx.systemPrompt.x()`，
+  所以 DSH 静态扫描器看不到触发点（官方检查报 C-11.5「declared but not observed」）。
+  声明是准确的，代码里确实在用；这是扫描器的静态边界，不是多声明。
 
 - **事件上限**：单日 5000 条（可配）。超出会计数并在 `chronicle_doctor` 报出。
 - **收口时机**：**跨过午夜后收「上一个自然日」**，不收当天——收口的本质是问「这一天过完了吗」，
