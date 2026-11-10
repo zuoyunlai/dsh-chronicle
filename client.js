@@ -61,7 +61,7 @@ window.__ModuleLoader__.load({
     }
     const isZh = !/^en/i.test(String((typeof navigator !== 'undefined' && navigator.language) || 'zh'))
     const T2 = (key) => (isZh ? I18N.zh : I18N.en)[key] || key
-    const VERSION = '1.2.0'
+    const VERSION = '1.3.0'
     const KIND = 'chronicle'
     const IMPL_ID = 'dsh-chronicle.panel'
 
@@ -835,64 +835,56 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 面板的呈现顺序：日结 → 按线索分组 → 明细。
-     * 用户实测反馈「条目孤立来看毫无意义」，所以日结必须排在最上面，
-     * 且同一条线索的条目要挨在一起，不能按重要度打散。
+     * 「近期」= 按天的**时间轴**。
+     *
+     * 改版原因（2026-11-10 用户实测）：「近期里没有时间轴」。
+     * 旧版把 7 天的条目按板块混在一起平铺，跨天不分区，
+     * 于是「哪件事是哪天做的」完全看不出来 —— 又回到了「条目孤立无意义」。
+     *
+     * 现在每天一块：
+     *   日期 + 星期 + 条数
+     *   当天日结（LLM 写的；没有就提示怎么产出）
+     *   当天条目，按 项目/决策/坑/其余 分组
      */
-    function renderGrouped(entries) {
-      const nodes = []
-      const daySummary = entries.find((entry) => entry.daySummary)?.daySummary
-      if (daySummary) {
-        nodes.push(
-          h(
-            'div',
-            {
-              key: 'summary',
-              style: {
-                margin: '8px 0 4px',
-                padding: '8px 10px',
-                borderLeft: '2px solid ' + T.accent,
-                background: T.chip,
-                borderRadius: 4,
-                color: T.fg,
-                fontSize: 12,
-                lineHeight: 1.65,
-              },
-            },
-            h('div', { style: { color: T.faint, fontSize: 11, marginBottom: 3 } }, '日结'),
-            daySummary,
-          ),
-        )
-      }
+    const SECTION_ORDER = ['projects', 'decisions', 'conventions', 'pitfalls', 'rejected', 'questions', 'threads']
+    const SECTION_TITLES = {
+      projects: '项目进展',
+      decisions: '结论与决策',
+      conventions: '约定与口径',
+      pitfalls: '坑与根因',
+      rejected: '被否方案',
+      questions: '未答问题',
+      threads: '其余进展',
+    }
 
+    const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+
+    /** 某天的星期（用本地时区，别用 UTC 否则跨时区会差一天）。 */
+    function weekdayOf(day) {
+      const date = new Date(day + 'T12:00:00')
+      return Number.isNaN(date.getTime()) ? '' : WEEKDAYS[date.getDay()]
+    }
+
+    /** 渲染一天之内的条目：按板块分组，组内保持已排好的顺序。 */
+    function renderDayEntries(entries) {
       const groups = new Map()
-      const order = ['projects', 'decisions', 'pitfalls', 'threads']
-      const titles = { projects: '项目进展', decisions: '结论与决策', pitfalls: '坑与根因', threads: '其余进展' }
       for (const entry of entries) {
-        const key = order.includes(entry.section) ? entry.section : 'threads'
+        const key = SECTION_ORDER.includes(entry.section) ? entry.section : 'threads'
         if (!groups.has(key)) groups.set(key, [])
         groups.get(key).push(entry)
       }
-      let index = 0
-      for (const key of order) {
+      const nodes = []
+      for (const key of SECTION_ORDER) {
         const list = groups.get(key)
         if (!list || list.length === 0) continue
-        index += 1
         nodes.push(
           h(
             'div',
             {
               key: 'sec-' + key,
-              style: {
-                marginTop: 10,
-                paddingTop: 8,
-                borderTop: '1px solid ' + T.line,
-                color: T.fg,
-                fontSize: 12,
-                fontWeight: 600,
-              },
+              style: { fontSize: 10, color: T.faint, margin: '6px 0 2px', letterSpacing: '.04em' },
             },
-            `${index}. ${titles[key]}`,
+            `${SECTION_TITLES[key]} · ${list.length}`,
           ),
         )
         for (const entry of list) nodes.push(h(Row, { key: entry.ref, entry }))
@@ -900,10 +892,94 @@ window.__ModuleLoader__.load({
       return nodes
     }
 
+    /** 一天的卡片：日期头 + 日结 + 当天条目。 */
+    function renderDay(bucket) {
+      const nodes = []
+      nodes.push(
+        h(
+          'div',
+          {
+            key: 'day-' + bucket.day,
+            style: {
+              display: 'flex',
+              alignItems: 'baseline',
+              gap: 6,
+              margin: '14px 0 4px',
+              paddingBottom: 3,
+              borderBottom: '1px solid ' + T.line,
+            },
+          },
+          h('span', { style: { fontSize: 12, fontWeight: 600, color: T.fg } }, bucket.day),
+          h('span', { style: { fontSize: 10, color: T.faint } }, weekdayOf(bucket.day)),
+          h('span', { style: { fontSize: 10, color: T.faint, marginLeft: 'auto' } }, `${bucket.count} 条`),
+        ),
+      )
+      if (bucket.summary) {
+        nodes.push(
+          h(
+            'div',
+            {
+              key: 'sum-' + bucket.day,
+              style: {
+                margin: '6px 0 4px',
+                padding: '7px 10px',
+                borderLeft: '2px solid ' + T.accent,
+                background: T.chip,
+                borderRadius: 4,
+                color: T.fg,
+                fontSize: 12,
+                lineHeight: 1.65,
+                whiteSpace: 'pre-wrap',
+              },
+            },
+            bucket.summary,
+          ),
+        )
+      } else {
+        nodes.push(
+          h(
+            'div',
+            {
+              key: 'nosum-' + bucket.day,
+              style: { fontSize: 10, color: T.faint, margin: '4px 0 2px', fontStyle: 'italic' },
+            },
+            '这一天还没有日结（用 llm 档收口那天即可生成）',
+          ),
+        )
+      }
+      nodes.push(...renderDayEntries(bucket.entries))
+      return nodes
+    }
+
+    /** 时间轴主体：新的一天在上。 */
+    function renderTimeline(dayList, entries) {
+      // 后端没给 dayList 时（老版本 / 空数据）退化成按 entry.day 自己分
+      const buckets =
+        Array.isArray(dayList) && dayList.length > 0
+          ? dayList
+          : (() => {
+              const map = new Map()
+              for (const entry of entries) {
+                const key = String(entry.day || '')
+                if (!map.has(key)) map.set(key, { day: key, summary: '', count: 0, entries: [] })
+                const bucket = map.get(key)
+                if (!bucket.summary && entry.daySummary) bucket.summary = entry.daySummary
+                bucket.count += 1
+                bucket.entries.push(entry)
+              }
+              return [...map.values()].sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : 0))
+            })()
+
+      if (buckets.length === 0) return null
+      const nodes = []
+      for (const bucket of buckets) nodes.push(...renderDay(bucket))
+      return nodes
+    }
+
     function Panel() {
       const [view, setView] = useState('recent')
       const [query, setQuery] = useState('')
-      const [state, setState] = useState({ loading: true, error: '', entries: [], summary: null })
+      const [state, setState] = useState({ loading: true, error: '', entries: [], summary: null, dayList: [] })
       // 从「事实 / 线索」点进图谱时记住要聚焦哪个节点
       const [focus, setFocus] = useState('')
       // 从图谱点进「事实」时高亮那一条
@@ -936,8 +1012,12 @@ window.__ModuleLoader__.load({
           const summary = await call('summary')
           let entries = []
           let view2 = nextView
+          let dayList = []
           if (nextView === 'recent') {
-            entries = (await call('recent', { days: '7', limit: '50' })).entries || []
+            const data = await call('recent', { days: '7', limit: '50' })
+            entries = data.entries || []
+            // 时间轴：按天分块，每块带当天日结（原来是平铺，跨天混成一锅）
+            dayList = data.dayList || []
           } else if (nextView === 'facts') {
             const data = await call('facts', { limit: '100' })
             entries = data.facts || []
@@ -955,7 +1035,7 @@ window.__ModuleLoader__.load({
             entries = data.results || data.entries || []
           }
           if (mine !== seq.current) return
-          setState({ loading: false, error: '', entries, summary, view: view2 })
+          setState({ loading: false, error: '', entries, summary, view: view2, dayList })
         } catch (error) {
           if (mine !== seq.current) return
           setState({ loading: false, error: String((error && error.message) || error), entries: [], summary: null })
@@ -1103,7 +1183,7 @@ window.__ModuleLoader__.load({
                     'div',
                     { style: { color: T.faint, fontSize: 12, padding: 12, lineHeight: 1.6 } },
                     view === 'recent'
-                      ? `还没有记录（${summary ? summary.entries : 0} 条）。说一句「收口今天」，或等到 23:50。`
+                      ? `还没有记录（${summary ? summary.entries : 0} 条）。说一句「收口今天」，或等收口时刻。`
                       : view === 'facts'
                         ? T2('emptyFacts')
                         : view === 'arcs'
@@ -1133,7 +1213,7 @@ window.__ModuleLoader__.load({
                           }),
                           h(ArcSpans, { data: state.entries[0]?.viz?.arcs, axis: state.entries[0]?.viz?.daily }),
                         )
-                    : renderGrouped(state.entries),
+                    : renderTimeline(state.dayList, state.entries),
         ),
       )
     }

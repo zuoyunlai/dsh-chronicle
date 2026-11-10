@@ -72,6 +72,11 @@ function makeFakeReact(log) {
   React.__resetSlots = () => {
     slotIndex = 0
   }
+  // 供测试预置某个 useState 槽的值（用来跳过 loading 直接渲染有数据的视图）
+  React.__seedSlot = (index, value) => {
+    stateSlots[index] = { value }
+  }
+  React.__slots = stateSlots
   return React
 }
 
@@ -247,4 +252,69 @@ test('面板文案表两侧键集一致（漏键会让英文界面露出中文�
   const missingInZh = [...en].filter((key) => !zh.has(key))
   assert.deepEqual(missingInEn, [], 'en 缺少这些键: ' + missingInEn.join(','))
   assert.deepEqual(missingInZh, [], 'zh 缺少这些键: ' + missingInZh.join(','))
+})
+
+test('「近期」是按天的时间轴：每天一块 + 当天日结（用户实测提的）', async () => {
+  const { mod, log, React } = await loadClient()
+  const ctx = makeCtx(log)
+  mod.apply(ctx)
+  const Body = bodyOf(log)
+  assert.ok(Body, '没有注册正文组件')
+
+  // Panel 的 useState 顺序：view(0) query(1) state(2) focus(3) highlight(4)
+  // 预置 state 为「已加载 + 两天数据」，跳过 loading 直接渲染时间轴
+  const dayList = [
+    {
+      day: '2026-11-10',
+      summary: '今天主攻起居注，修了时间轴与日结。',
+      count: 2,
+      entries: [
+        { ref: 'a#1', day: '2026-11-10', section: 'projects', title: '改面板时间轴', importance: 4 },
+        { ref: 'a#2', day: '2026-11-10', section: 'pitfalls', title: '数组挂属性太脆', importance: 3 },
+      ],
+    },
+    {
+      day: '2026-11-09',
+      summary: '昨天定了六条产品决议。',
+      count: 1,
+      entries: [{ ref: 'b#1', day: '2026-11-09', section: 'decisions', title: '六条决议锁定', importance: 5 }],
+    },
+  ]
+  const entries = dayList.flatMap((bucket) => bucket.entries)
+
+  React.__resetSlots()
+  React.__seedSlot(2, { loading: false, error: '', entries, summary: null, view: 'recent', dayList })
+  renderToLog(Body(), React, log)
+
+  const text = JSON.stringify(log.elements)
+  // 两天都要出现（时间轴而不是平铺）
+  assert.ok(text.includes('2026-11-10'), '缺少 2026-11-10 的日期头')
+  assert.ok(text.includes('2026-11-09'), '缺少 2026-11-09 的日期头（跨天必须分区）')
+  // 两天的日结都要出现（旧版只取第一个 daySummary）
+  assert.ok(text.includes('今天主攻起居注'), '缺少 11-10 的日结')
+  assert.ok(text.includes('昨天定了六条产品决议'), '缺少 11-09 的日结')
+  // 板块小标题
+  assert.ok(text.includes('项目进展'), '缺少板块分组标题')
+})
+
+test('「近期」没有日结时给出可操作提示，而不是空白', async () => {
+  const { mod, log, React } = await loadClient()
+  const ctx = makeCtx(log)
+  mod.apply(ctx)
+  const Body = bodyOf(log)
+
+  const dayList = [
+    {
+      day: '2026-11-09',
+      summary: '',
+      count: 1,
+      entries: [{ ref: 'a#1', day: '2026-11-09', section: 'projects', title: '只有条目没有日结', importance: 3 }],
+    },
+  ]
+  React.__resetSlots()
+  React.__seedSlot(2, { loading: false, error: '', entries: dayList[0].entries, summary: null, view: 'recent', dayList })
+  renderToLog(Body(), React, log)
+
+  const text = JSON.stringify(log.elements)
+  assert.ok(text.includes('还没有日结'), '缺日结时应提示怎么产出，而不是留白')
 })
