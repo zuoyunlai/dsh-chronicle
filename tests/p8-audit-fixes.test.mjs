@@ -433,3 +433,48 @@ test('方案 B：lookback 截掉的天要报出来', () => {
   assert.equal(result.days.length, 30)
   assert.equal(result.dropped.length, 10, '被截掉的天必须能看见')
 })
+
+/* ---------- P1-1 实体页：必须从磁盘读图，不能依赖调用方传形状 ---------- */
+
+test('实体页：自己从 graph/entities.json 读，不靠调用方传 graph（真实 bug 守卫）', async () => {
+  const { mkdtemp, mkdir, writeFile, readdir, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { persistEntityPages } = await import('../lib/entitypages.js')
+
+  const dataDir = await mkdtemp(join(tmpdir(), 'ent-real-d-'))
+  const vaultDir = await mkdtemp(join(tmpdir(), 'ent-real-v-'))
+  try {
+    await mkdir(join(dataDir, 'graph'), { recursive: true })
+    // 真实形状：entities.json 的节点在 entities 字段里（不是 nodes）
+    await writeFile(
+      join(dataDir, 'graph', 'entities.json'),
+      JSON.stringify({
+        v: 1,
+        days: 2,
+        entities: [
+          { name: 'index.js', kind: 'file', days: ['2026-11-09'], mentions: [], degree: 15 },
+          { name: 'CHANGELOG.md', kind: 'file', days: ['2026-11-09'], mentions: [], degree: 8 },
+        ],
+      }),
+      'utf8',
+    )
+    await writeFile(
+      join(dataDir, 'graph', 'edges.jsonl'),
+      JSON.stringify({ a: 'index.js', b: 'CHANGELOG.md', type: 'file', weight: 5, evidence: [] }) + '\n',
+      'utf8',
+    )
+    await writeFile(join(dataDir, 'graph', 'entity-hits.json'), JSON.stringify({ 'index.js': 2, 'CHANGELOG.md': 1 }), 'utf8')
+
+    // 关键：**不传 graph**。之前调用方传的是 mergeGraph() 的统计摘要（数字），
+    // 于是 nodes 恒为空、实体页一个都不建，而单测自己构造 nodes 就发现不了。
+    const result = await persistEntityPages({ dataDir, vaultDir, rule: 'on-hit', entries: [] })
+    assert.equal(result.pages, 2, '应从磁盘读到 2 个节点并各建一页')
+
+    const files = (await readdir(join(vaultDir, 'entities'))).sort()
+    assert.deepEqual(files, ['CHANGELOG.md', 'index.js.md'], 'CHANGELOG.md 不能变成 CHANGELOG.md.md')
+  } finally {
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 })
+    await rm(vaultDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 })
+  }
+})
