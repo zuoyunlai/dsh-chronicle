@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  .banner {
+    width: 1280px; height: 480px;
+    display: flex; align-items: center; gap: 52px;
+    padding: 0 84px;
+    font-family: "Segoe UI", "Microsoft YaHei", -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .dark  { background: #1B1D21; }
+  .light { background: #FAFAF8; }
+
+  .mark { flex: 0 0 auto; }
+  .mark img { display: block; width: 168px; height: 168px; }
+
+  .text { flex: 1 1 auto; min-width: 0; }
+
+  .title {
+    font-size: 62px; font-weight: 700; letter-spacing: .18em;
+    line-height: 1.1; margin: 0 0 6px;
+  }
+  .dark  .title { color: #F2E8D5; }
+  .light .title { color: #2B2420; }
+
+  .slug {
+    font-family: "Cascadia Code", "Consolas", ui-monospace, monospace;
+    font-size: 21px; letter-spacing: .1em; margin: 0 0 26px;
+  }
+  .dark  .slug { color: #8A7154; }
+  .light .slug { color: #9A7B54; }
+
+  .rule { width: 74px; height: 3px; background: #C8452F; border-radius: 2px; margin-bottom: 22px; }
+
+  .tag {
+    font-size: 17px; line-height: 1.75; max-width: 620px; margin: 0;
+  }
+  .dark  .tag { color: #9AA0A8; }
+  .light .tag { color: #6B7280; }
+  .tag b { font-weight: 600; }
+  .dark  .tag b { color: #D6D8DC; }
+  .light .tag b { color: #374151; }
+</style>
+</head>
+<body>
+
+<div class="banner dark">
+  <div class="mark"><img src="../../icon.svg" alt=""></div>
+  <div class="text">
+    <h1 class="title">起居注</h1>
+    <p class="slug">dsh-chronicle</p>
+    <div class="rule"></div>
+    <p class="tag">把你用 DeepSeek Harness 做的事，按重要性收口成一份<b>可审的 Markdown 编年史</b>。<br>跨会话 · 带证据 · 可检索 · 可关联 · 零第三方依赖</p>
+  </div>
+</div>
+
+</body>
+</html>

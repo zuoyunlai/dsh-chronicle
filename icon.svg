@@ -1,17 +1,33 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="dsh-chronicle">
-  <rect x="2" y="2" width="60" height="60" rx="14" fill="#23252a"/>
-  <!-- 卷册：左轴 + 纸面 -->
-  <rect x="12" y="11" width="5" height="42" rx="2.5" fill="#5b4636"/>
-  <rect x="18" y="11" width="31" height="42" rx="4" fill="#f2e8d5"/>
-  <rect x="18" y="11" width="31" height="42" rx="4" fill="none" stroke="#c8452f" stroke-opacity="0.18" stroke-width="1.2"/>
-  <!-- 逐日记录的三条纹 -->
-  <g fill="#8a7154">
-    <rect x="23" y="20" width="17" height="2.6" rx="1.3"/>
-    <rect x="23" y="27" width="21" height="2.6" rx="1.3"/>
-    <rect x="23" y="34" width="14" height="2.6" rx="1.3"/>
-  </g>
-  <!-- 重要性星标：一眼看出"按重要度排序" -->
-  <path d="M43.4 39.2l1.5 3.1 3.4.5-2.5 2.4.6 3.4-3-1.6-3 1.6.6-3.4-2.5-2.4 3.4-.5z" fill="#e8a33d"/>
-  <!-- 轴头束带 -->
-  <rect x="9" y="9" width="11" height="4" rx="2" fill="#7a5c46"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="dsh-chronicle 起居注">
+  <title>dsh-chronicle</title>
+  <!--
+    起居注 = 帝王逐日记录。图形取三样：卷册（记录）、逐日条目（每天一条）、朱印（官修）。
+
+    ## 设计约束：必须在 16px 下活着
+    侧栏标签可能是 16px。64 单位 viewBox 渲染到 16px 时，1 单位 = 0.25px，
+    所以凡是小于 6 单位（1.5px）的东西都会糊。据此定的线：
+      · 卷轴轴 8 单位 = 2.00px  ✅
+      · 条目一条 8 单位高 = 2.00px ✅（原来两条 4 单位只 1px，且间隙 1.25px，必糊）
+      · 朱印 13 单位 = 3.25px  ✅
+    16px 下能读出来的就三层：米色纸 + 深棕书脊 + 红印。这就够了。
+    更大尺寸（24/32/96px）才看得到纸的圆角与印里的小横线。
+
+    ## 底色
+    #2E3138 比侧栏深色底 #23252A / #1B1D21 更亮一点，否则图标边缘和背景分不开。
+  -->
+  <rect width="64" height="64" rx="15" fill="#2E3138"/>
+
+  <!-- 卷轴左轴（书脊） -->
+  <rect x="9" y="10" width="8" height="44" rx="4" fill="#5B4636"/>
+
+  <!-- 纸面 -->
+  <rect x="17" y="10" width="34" height="44" rx="4" fill="#F2E8D5"/>
+
+  <!-- 逐日条目：只留一条，保证 2px -->
+  <rect x="24" y="19" width="20" height="8" rx="4" fill="#8A7154"/>
+
+  <!-- 朱印：官修记录的印记，也是唯一的暖色锚点 -->
+  <rect x="34" y="34" width="13" height="13" rx="3" fill="#C8452F"/>
+  <rect x="38" y="38.6" width="5" height="2" rx="1" fill="#F2E8D5" fill-opacity="0.95"/>
+  <rect x="38" y="42.4" width="3" height="2" rx="1" fill="#F2E8D5" fill-opacity="0.95"/>
 </svg>

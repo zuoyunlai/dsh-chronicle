@@ -1,3 +1,14 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)"
+            srcset="https://raw.githubusercontent.com/zuoyunlai/dsh-chronicle/main/docs/brand/banner-dark.png">
+    <source media="(prefers-color-scheme: light)"
+            srcset="https://raw.githubusercontent.com/zuoyunlai/dsh-chronicle/main/docs/brand/banner-light.png">
+    <img src="https://raw.githubusercontent.com/zuoyunlai/dsh-chronicle/main/docs/brand/banner-dark.png"
+         alt="dsh-chronicle · 起居注" width="720">
+  </picture>
+</p>
+
 # 起居注 · dsh-chronicle
 
 每天把你用 DeepSeek Harness 做的事，按重要性收口成一份**可审的 Markdown 编年史**：跨会话、带证据、可检索、可关联。
