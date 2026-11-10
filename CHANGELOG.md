@@ -1,5 +1,54 @@
 # CHANGELOG
 
+## 2.0.3 — 2026-11-10
+
+首发版本。仓库建起来、CI 跑通，**CI 当场抓出 2 个真问题**，所以把版本从 2.0.2 提到 2.0.3。
+
+### CI 抓出的真 bug：`withTimeout` 的超时定时器不能 `unref`
+
+```js
+timer = setTimeout(() => reject(...), ms)
+timer.unref()   // ← 这一行让保护等于没有
+```
+
+`unref()` 之后，如果这个定时器是**唯一的待办句柄**，事件循环会先变空、进程直接退出，
+**超时根本没机会触发**。「只有一个巨无霸会话卡死」正是这种情况下最需要保护的场景。
+
+本地复现：单挂一个 never-resolving promise 调 `withTimeout(never, 300)` ——
+`unref` 版本进程直接退出，去掉后稳稳 300ms 触发。
+
+`finally` 里会 `clearTimeout`，所以不 unref 不存在泄漏。
+
+### CI 抓出的测试缺陷：`settledDays` 依赖时区
+
+CI 跑在 UTC，而测试用 `new Date('2026-11-10T00:05:00+08:00')`——
+在 UTC 下它的本地日期是 **11-09**，而 `dayKey` 取本地日期，于是断言全错。
+改用本地构造器 `new Date(2026, 10, 10, 0, 5)`，任何时区都得到同一天。
+已验：`TZ=UTC` / `TZ=America/New_York` / 本地 `+08:00` 三种时区全绿。
+
+### 打包
+
+`files` 去掉 `tests/`（128 kB 测试占包体 65%）：195.8 kB/47 文件 → **158.6 kB/35 文件**。
+
+补 `repository` / `bugs` / `homepage`。
+
+### CI / 发版
+
+- `.github/workflows/ci.yml`：push/PR 跑语法、160 条测试（Node 22 + 24）、版本一致性、
+  tarball 内容自检、**解包后独立导入**（证明不依赖仓库残余文件）
+- `.github/workflows/publish.yml`：`v*` tag 触发 → verify → OIDC 发布（幂等：版本已存在则跳过）→ 建 Release
+
+### 首发必须手动（npm 的已知限制）
+
+npm **不支持为尚不存在的包预配置 Trusted Publisher**——
+配置入口在 `npmjs.com/package/<name>/settings`，包不存在就没有那个页面。
+（[npm/documentation#1926](https://github.com/npm/documentation/issues/1926) open、
+[npm/cli#8544](https://github.com/npm/cli/issues/8544)："first publish 不在 MVP 里"）
+
+所以顺序是：手动发首版 → 配 trusted publisher → 之后 tag 全自动。
+
+### 160 条测试全绿
+
 ## 2.0.2 — 2026-11-10
 
 用户第三次追问「全部修订完了吗」，逐条按审计原文核对，又发现 2 项没真修好。
