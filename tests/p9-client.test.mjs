@@ -53,9 +53,21 @@ function makeFakeReact(log) {
     useMemo(fn) {
       return fn()
     },
-    useEffect(fn) {
-      // 不真正执行副作用（rAF / 网络），只记录，避免环境依赖
+    useEffect(fn, deps) {
+      // 真的执行副作用（并收集 cleanup）。
+      // 不跑的话 useEffect 里的订阅逻辑根本测不到 ——
+      // 「宿主语言驱动面板」这条就永远只能靠代码审查。
       log.effects.push(fn)
+      const key = deps === undefined ? 'always' : JSON.stringify(deps)
+      if (!stateSlots.effectDeps) stateSlots.effectDeps = new Map()
+      if (!stateSlots.effectCleanups) stateSlots.effectCleanups = new Map()
+      const prev = stateSlots.effectDeps.get(key)
+      if (prev === key && deps !== undefined) return
+      const oldCleanup = stateSlots.effectCleanups.get(key)
+      if (typeof oldCleanup === 'function') oldCleanup()
+      stateSlots.effectDeps.set(key, key)
+      const result = fn()
+      if (typeof result === 'function') stateSlots.effectCleanups.set(key, result)
     },
     Component: class {
       constructor(props) {
@@ -70,19 +82,31 @@ function makeFakeReact(log) {
       }
     },
   }
+  // 必须**彻底**重置：只把 slotIndex 归零的话，上一个测试留下的
+  // state 槽与 effectDeps 会让下一个测试的 useEffect 直接被跳过
+  // （deps 没变 → 早退），于是「宿主语言驱动面板」这条永远测不到。
   React.__resetSlots = () => {
     slotIndex = 0
+    stateSlots.length = 0
+    stateSlots.effectDeps = new Map()
+    stateSlots.effectCleanups = new Map()
   }
   // 供测试预置某个 useState 槽的值（用来跳过 loading 直接渲染有数据的视图）
   React.__seedSlot = (index, value) => {
     stateSlots[index] = { value }
   }
   React.__slots = stateSlots
+  // 重渲染时把 hook 游标拨回 0 —— 真实 React 复用同一批 hook 槽，
+  // 不拨的话第二趟渲染会读到全新的槽（state 全丢）。
+  React.__rewind = () => {
+    slotIndex = 0
+  }
   return React
 }
 
 /** 递归渲染：把组件树真正展开成宿主元素，渲染期错误就会暴露。 */
 function renderToLog(element, React, log, depth = 0) {
+  if (depth === 0 && typeof React.__rewind === 'function') React.__rewind()
   if (element === null || element === undefined || element === false) return
   if (Array.isArray(element)) {
     for (const child of element) renderToLog(child, React, log, depth)
@@ -398,4 +422,54 @@ test('图标：标签 chip 里有内联的竹简 SVG（宿主不给图标，得�
   assert.ok(fills.includes('#F1E7D4'), '应有米色书列 #F1E7D4')
   const bamboo = rects.filter((r) => r.fill === '#B39B77')
   assert.equal(bamboo.length, 3, '应是三片竹简，实际 ' + bamboo.length)
+})
+
+test('界面语言：宿主 locale 服务的 active 决定面板语言（2026-11-10 实测修）', async () => {
+  const { mod, log, React } = await loadClient()
+  // 宿主 locale 服务：active = 'zh'（宿主界面是中文）
+  const localeService = {
+    getSnapshot: () => ({ active: 'zh', locales: [], revision: 1 }),
+    subscribe: (fn) => { localeService._fn = fn; return () => {} },
+  }
+  const ctx = makeCtx(log)
+  ctx.locale = localeService
+  ctx.get = (k) => ctx[k]
+  mod.apply(ctx)
+  const Body = bodyOf(log)
+  assert.ok(Body, '没有注册正文组件')
+
+  const dayList = [{ day: '2026-11-10', summary: '', count: 1, entries: [{ ref: 'a#1', day: '2026-11-10', section: 'projects', title: 't', importance: 3 }] }]
+  React.__resetSlots()
+  React.__seedSlot(2, { loading: false, error: '', entries: dayList[0].entries, summary: { uiLocale: 'auto' }, view: 'recent', dayList })
+  renderToLog(Body(), React, log)          // 第 1 趟：effect 订阅 locale 并写 state
+  log.elements.length = 0
+  renderToLog(Body(), React, log)          // 第 2 趟：用上新的 hostLocale
+
+  const text = JSON.stringify(log.elements)
+  // 宿主是中文 → 面板标签必须是中文，不能是英文
+  assert.ok(text.includes('近期'), '宿主 active=zh 时面板应显示中文「近期」：' + text.slice(0, 300))
+  assert.ok(!text.includes('"Recent"'), '不该出现英文标签 Recent')
+})
+
+test('界面语言：宿主 active=en 时面板显示英文', async () => {
+  const { mod, log, React } = await loadClient()
+  const localeService = {
+    getSnapshot: () => ({ active: 'en', locales: [], revision: 1 }),
+    subscribe: () => () => {},
+  }
+  const ctx = makeCtx(log)
+  ctx.locale = localeService
+  ctx.get = (k) => ctx[k]
+  mod.apply(ctx)
+  const Body = bodyOf(log)
+
+  const dayList = [{ day: '2026-11-10', summary: '', count: 1, entries: [{ ref: 'a#1', day: '2026-11-10', section: 'projects', title: 't', importance: 3 }] }]
+  React.__resetSlots()
+  React.__seedSlot(2, { loading: false, error: '', entries: dayList[0].entries, summary: { uiLocale: 'auto' }, view: 'recent', dayList })
+  renderToLog(Body(), React, log)
+  log.elements.length = 0
+  renderToLog(Body(), React, log)
+
+  const text = JSON.stringify(log.elements)
+  assert.ok(text.includes('Recent'), '宿主 active=en 时面板应显示英文 Recent：' + text.slice(0, 300))
 })

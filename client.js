@@ -71,21 +71,29 @@ window.__ModuleLoader__.load({
      * 核实不到那个服务的真实形状。与其猜一个可能不存在的 API，
      * 不如用标准 DOM + 一个可手动覆盖的配置项。
      */
-    function preferredLocale(getPreference) {
-      try {
-        const pinned = typeof getPreference === 'function' ? getPreference('uiLocale') : ''
-        if (/^en/i.test(String(pinned))) return 'en'
-        if (/^zh/i.test(String(pinned))) return 'zh'
-      } catch {
-        /* 拿不到就往下走 */
-      }
+    // apply 里把 ctx 存下来：Panel 是工厂级组件，拿不到 apply 的参数，
+    // 但要订阅宿主的 locale 服务。
+    let runtimeCtx = null
+
+    /**
+     * 解析界面语言。优先级：
+     *   ① 配置 uiLocale（手动指定）
+     *   ② 宿主 locale 服务的 active —— 宿主界面真正的语言
+     *   ③ document.lang → navigator.language（浏览器/OS 兜底）
+     */
+    function resolveLocale(pinned, hostActive) {
+      const pin = String(pinned || '').trim()
+      if (pin === 'zh' || pin === 'en') return pin
+      const active = String(hostActive || '').trim()
+      if (/^en/i.test(active)) return 'en'
+      if (/^zh/i.test(active)) return 'zh'
       const docLang = typeof document !== 'undefined' && document.documentElement && document.documentElement.lang
       if (docLang) return /^en/i.test(String(docLang)) ? 'en' : 'zh'
       const nav = typeof navigator !== 'undefined' ? navigator.language : ''
       return /^en/i.test(String(nav || '')) ? 'en' : 'zh'
     }
 
-    let currentLocale = preferredLocale()
+    let currentLocale = resolveLocale('', '')
 
     /** 设置页改了语言时调用（由宿主配置推下来）。 */
     function setLocale(next) {
@@ -94,7 +102,7 @@ window.__ModuleLoader__.load({
         return true
       }
       if (next === 'auto' || !next) {
-        currentLocale = preferredLocale()
+        currentLocale = resolveLocale('', '')
         return true
       }
       return false
@@ -102,7 +110,7 @@ window.__ModuleLoader__.load({
 
     const isZh = () => currentLocale === 'zh'
     const T2 = (key) => (currentLocale === 'zh' ? I18N.zh : I18N.en)[key] || key
-    const VERSION = '2.2.2'
+    const VERSION = '2.3.0'
     const KIND = 'chronicle'
 
     /**
@@ -1063,6 +1071,23 @@ window.__ModuleLoader__.load({
       const [view, setView] = useState('recent')
       const [query, setQuery] = useState('')
       const [state, setState] = useState({ loading: true, error: '', entries: [], summary: null, dayList: [] })
+      // 宿主界面语言：订阅 locale 服务（active 就是它当前的语言）。
+      // 用 state 存 —— 模块级变量改了不会触发 React 重渲染。
+      const [hostLocale, setHostLocale] = useState('')
+      useEffect(() => {
+        const service =
+          runtimeCtx && typeof runtimeCtx.get === 'function' ? runtimeCtx.get('locale') : null
+        if (!service || typeof service.getSnapshot !== 'function') return
+        const sync = () => {
+          const snapshot = service.getSnapshot()
+          setHostLocale(snapshot && snapshot.active ? String(snapshot.active) : '')
+        }
+        sync()
+        if (typeof service.subscribe !== 'function') return
+        return service.subscribe(sync)
+      }, [])
+      // 渲染期把语言同步给 T2（模块级），这样同一趟渲染里取到的就是对的
+      currentLocale = resolveLocale(state.summary && state.summary.uiLocale, hostLocale)
       // 从「事实 / 线索」点进图谱时记住要聚焦哪个节点
       const [focus, setFocus] = useState('')
       // 从图谱点进「事实」时高亮那一条
@@ -1361,8 +1386,9 @@ window.__ModuleLoader__.load({
     const Body = () => h(Boundary, null, h(Panel))
 
     return {
-      inject: ['slots', 'sidebarRightTabs', 'sidebarRight'],
+      inject: ['slots', 'sidebarRightTabs', 'sidebarRight', 'locale'],
       apply(ctx) {
+        runtimeCtx = ctx
         try {
           console.info(TAG, 'client v' + VERSION + ' loaded')
         } catch {

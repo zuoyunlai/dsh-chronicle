@@ -1,5 +1,56 @@
 # CHANGELOG
 
+## 2.3.0 — 2026-11-11
+
+**修「宿主是中文，面板导航却是英文」。**
+
+### 根因：我读的是浏览器/OS 的语言，不是 DSH 的界面语言
+
+之前的语言检测是：
+
+\`\`\`js
+document.documentElement.lang  →  navigator.language
+\`\`\`
+
+这两个都是**浏览器/OS**的语言。DSH 的界面语言是**宿主自己的设置**，
+Electron 应用里两者完全对不上 —— 宿主界面中文、\"navigator.language\" 却是 en-US，
+于是面板显示英文。
+
+### 修法：用宿主 locale 服务
+
+宿主提供 \`locale\` 服务（\`ctx.locale\`）：
+
+\`\`\`ts
+type LocaleSnapshot = { active: LocaleId; locales: readonly LocaleDefinition[]; revision: number }
+\`\`\`
+
+\`snapshot.active\` 就是宿主界面当前的语言。新的优先级：
+
+1. 配置 \`uiLocale\`（手动指定，zh / en）
+2. **宿主 locale 服务的 active**
+3. \`document.lang\` → \`navigator.language\`（兜底）
+
+并且**订阅**它 —— 用户在设置里切语言时面板跟着切，不用重开插件。
+订阅放在 Panel 里（用 \`useState\` 存），因为模块级变量改了不会触发 React 重渲染。
+
+\`package.json\` 的 \`dsh.client.inject\` 补 \`@deepseek-ai/dsh-client-locale\`（服务的提供方）。
+
+### 顺带修掉测试脚手架的三个问题
+
+这三个都是「假 React 与真实 React 不一致」，之前没暴露是因为断言太松：
+
+1. **useEffect 从不执行** —— 订阅逻辑根本测不到，只能靠代码审查
+2. **\`__resetSlots\` 没清空 state 槽** —— 上一个测试的 \`effectDeps\` 让下一个测试的
+   useEffect 直接被跳过（deps 没变就早退）
+3. **每次渲染都把 hook 游标往后推** —— 真实 React 复用同一批 hook 槽，
+   不拨回的话第二趟渲染读到全新槽，state 全丢
+
+修完才能真正验证「宿主语言驱动面板」。
+
+### 171 条测试全绿（新增 2 条：宿主 active=zh → 面板中文；active=en → 面板英文）
+
+## 2.2.2 — 2026-11-10
+
 ## 2.2.2 — 2026-11-10
 
 **修我在 P1-11 修复时引入的回归：根因核验的证据窗变成了空。**
