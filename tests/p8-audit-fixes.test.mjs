@@ -581,3 +581,63 @@ test('规则档也产出四块结构（之前只有 LLM 档有，自检因此误
     assert.ok(Array.isArray(section.refs) && section.refs.length > 0)
   }
 })
+
+/* ---------- P1-11 回归：证据窗必须用原文，不能用纲要的头 ---------- */
+
+test('原文索引：ref 用用户行的 seq，与 buildTurns 完全一致', async () => {
+  const { buildTurns, buildTurnTextIndex } = await import('../lib/outline.js')
+  const rows = [
+    { v: 1, sid: 's1', seq: 100, ts: '2026-11-10T10:00:00+08:00', kind: 'user', text: '起居注面板报 Cannot read properties of null', ws: 'w' },
+    { v: 1, sid: 's1', seq: 108, ts: '2026-11-10T10:00:05+08:00', kind: 'assistant', text: '找到了，是 React 的 updater 里读了可变 ref。', ws: 'w' },
+    { v: 1, sid: 's1', seq: 200, ts: '2026-11-10T10:01:00+08:00', kind: 'user', text: '第二条', ws: 'w' },
+    { v: 1, sid: 's1', seq: 208, ts: '2026-11-10T10:01:05+08:00', kind: 'assistant', text: '第二条的答复正文很长很长很长很长很长', ws: 'w' },
+  ]
+  const turns = buildTurns(rows)
+  const index = buildTurnTextIndex(rows)
+
+  assert.equal(turns.length, 2)
+  assert.equal(index.size, 2, '两条轮次都该有原文')
+
+  // 键必须是**用户行的 seq**，不是助手行的
+  assert.ok(index.has('s1#100'), '应按用户行 seq 建键（不是 108）：' + [...index.keys()].join(','))
+  assert.ok(!index.has('s1#108'), '不该出现助手行的 seq 作键')
+
+  const text = index.get('s1#100')
+  assert.match(text, /Cannot read properties of null/, '应含用户原文')
+  assert.match(text, /React 的 updater/, '应含助手原文')
+})
+
+test('纲要里没有 user/assistant 字段 —— 证据窗不能用它们（2026-11-10 回归）', async () => {
+  const { buildTurns, buildTurnTextIndex } = await import('../lib/outline.js')
+  const rows = [
+    { v: 1, sid: 's1', seq: 100, ts: '2026-11-10T10:00:00+08:00', kind: 'user', text: '问题描述', ws: 'w' },
+    { v: 1, sid: 's1', seq: 108, ts: '2026-11-10T10:00:05+08:00', kind: 'assistant', text: '根因是 updater 读了可变 ref', ws: 'w' },
+  ]
+  const turn = buildTurns(rows)[0]
+  // 这两个字段在纲要里不存在 —— 写证据窗时用了它们就会永远取到空串
+  assert.equal(turn.user, undefined, '纲要没有 user 字段')
+  assert.equal(turn.assistant, undefined, '纲要没有 assistant 字段')
+  assert.ok(turn.userHead, '纲要有 userHead')
+  assert.ok(turn.assistantHead, '纲要有 assistantHead')
+
+  // 真正的证据窗来自原文索引
+  const index = buildTurnTextIndex(rows)
+  assert.match(index.get(turn.ref), /updater 读了可变 ref/)
+})
+
+test('根因核验：原文里有依据就通过，取不到原文才降级', async () => {
+  const { verifyRootCauses } = await import('../lib/llm.js')
+  // ref 必须带上：核验是按 entry.ref 去证据索引里取原文的
+  const entries = [{ ref: 'a#1', section: 'pitfalls', basis: '根因：updater 里读了可变 ref · 绕过：改用 ref.current 快照' }]
+  const evidence = new Map([['a#1', 'React 的 updater 在 render 阶段读了可变 ref，触发 tearing。']])
+
+  verifyRootCauses(entries, evidence)
+  assert.match(entries[0].basis, /根因：updater 里读了可变 ref/)
+  assert.equal(entries[0].rootCauseUnverified, undefined, '原文有依据就不该标记未核验')
+
+  // 取不到原文 → 保守降级
+  const entries2 = [{ ref: 'a#2', section: 'pitfalls', basis: '根因：某个没写进原文的根因' }]
+  verifyRootCauses(entries2, new Map())
+  assert.match(entries2[0].basis, /无法取到原文/)
+  assert.equal(entries2[0].rootCauseUnverified, true)
+})
