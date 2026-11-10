@@ -1,5 +1,27 @@
 # CHANGELOG
 
+## 2.0.4 — 2026-11-10
+
+**首个由 CI 用 OIDC 发布、带 provenance 的版本**（2.0.3 是本地 token 手动发的，无 attestation）。
+
+### 修了一处会误导人的文档错误
+
+README 原来只写「`dsh plugin --profile <profile> add dsh-chronicle`」，**这句不够**：
+`dsh plugin` 只是把参数转发给 pnpm，**只装包、不启用**。装完插件不会出现在
+`dsh.profile.bundles` 里，结果是「装着但 `chronicle_*` 工具全消失」。
+
+现在 README 写清三步：装包 → 在「设置 → 插件」里**打开** → 重启进程。
+
+### 无功能改动
+
+本版代码与 2.0.3 完全一致，只改 README 与版本号。
+
+它存在的意义是**验证 Trusted Publisher 真能跑通**——
+OIDC 的凭据交换只在真正的 publish 时发生，`--dry-run` 不会触发，
+所以除了真发一版没有别的验证办法。
+
+验证通过后，本版应带上 `dist.attestations`（provenance）且 `_npmUser` 指向 CI。
+
 ## 2.0.3 — 2026-11-10
 
 首发版本。仓库建起来、CI 跑通，**CI 当场抓出 2 个真问题**，所以把版本从 2.0.2 提到 2.0.3。

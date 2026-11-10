@@ -61,7 +61,7 @@ window.__ModuleLoader__.load({
     }
     const isZh = !/^en/i.test(String((typeof navigator !== 'undefined' && navigator.language) || 'zh'))
     const T2 = (key) => (isZh ? I18N.zh : I18N.en)[key] || key
-    const VERSION = '2.0.3'
+    const VERSION = '2.0.4'
     const KIND = 'chronicle'
     const IMPL_ID = 'dsh-chronicle.panel'
 

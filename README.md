@@ -4,7 +4,7 @@
 
 产物是一个独立的 Obsidian vault，**零第三方依赖**——`dependencies` 为空，只声明宿主自带的 `@deepseek-ai/*`。
 
-> **状态：v2.0.3**（P6）
+> **状态：v2.0.4**（P6）
 > 采集 → 回捞 → 纲要 → 规则/LLM 打分 → **日结 + 七块** → 周文件 → 按天时间轴 → 实体图与实体页 → 事实库 → 跨天线索 → 规则导出 → 右侧栏面板。
 > 160 条测试全绿。
 
@@ -45,11 +45,21 @@
 
 ## 安装
 
-```sh
+**推荐：在 DSH 的「设置 → 插件」里搜索 `dsh-chronicle` 安装。** 插件管理会同时做三件事：
+装依赖、加进 `dsh.profile.bundles`、应用包内的 `cordis.patch.yml`。
+
+命令行等价物：
+
+```bash
 dsh plugin --profile <你的 profile> add dsh-chronicle
 ```
 
-装完重启该 profile 的进程。然后在会话里问一句「chronicle 装好了吗」，模型会调 `chronicle_ping` 自检，输出里能看到数据目录、产物目录与宿主服务就绪情况。
+⚠️ **`dsh plugin ... add` 只是转发给 pnpm，它只装包、不启用。**
+装完必须再去「设置 → 插件」把这个插件**打开**，否则 `chronicle_*` 工具不会出现
+（表现为「装着但工具全消失」）。
+
+装完重启该 profile 的进程。然后在会话里问一句「chronicle 装好了吗」，
+模型会调 `chronicle_ping` 自检，输出里能看到版本、数据目录、产物目录与宿主服务就绪情况。
 
 ---
 
