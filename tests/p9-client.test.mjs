@@ -31,7 +31,8 @@ function makeFakeReact(log) {
       const merged = { ...(props || {}) }
       if (flat.length === 1) merged.children = flat[0]
       else if (flat.length > 1) merged.children = flat
-      if (typeof type === 'string') log.elements.push({ type, props: merged, children: flat })
+      // 不在这里 push：renderToLog 才是唯一的记录点。
+      // 两处都 push 会让每个元素记两遍（数量断言翻倍）。
       return { type, props: merged, children: flat }
     },
     useState(initial) {
@@ -363,4 +364,38 @@ test('界面语言：uiLocale=auto 时跟随 document.lang / navigator', async (
   const text = JSON.stringify(log.elements)
   // 测试环境没有 document.lang、navigator.language 为 undefined → 回落中文
   assert.ok(text.includes('近期') || text.includes('Recent'), 'auto 模式应能渲染出某个语言的标签：' + text.slice(0, 200))
+})
+
+test('图标：标签 chip 里有内联的竹简 SVG（宿主不给图标，得自己画）', async () => {
+  const { mod, log, React } = await loadClient()
+  const ctx = makeCtx(log)
+  mod.apply(ctx)
+
+  // 标签 chip 的内容 = 标题槽注册的组件（宿主只渲染这个，不加图标）
+  const titleSlots = log.slots.filter((item) => item.descriptor.name === 'sidebar.right.pane.tab.title')
+  assert.ok(titleSlots.length > 0, '没有注册 sidebar.right.pane.tab.title 槽')
+
+  React.__resetSlots()
+  const tree = titleSlots[0].component()
+  renderToLog(tree, React, log)
+
+  const svgs = log.elements.filter((el) => el.type === 'svg')
+  assert.ok(svgs.length > 0, '标题槽里应该有一个内联 SVG 图标')
+
+  // 竹简图形的三个特征：深色圆角底板 + 三片竹色条 + 米色书列
+  const rects = []
+  for (const svg of svgs) {
+    const walk = (node) => {
+      if (!node || typeof node !== 'object') return
+      if (node.type === 'rect') rects.push(node.props || {})
+      for (const c of node.children || []) walk(c)
+    }
+    walk(svg)
+  }
+  const fills = rects.map((r) => r.fill).filter(Boolean)
+  assert.ok(fills.includes('#2E3138'), '应有底板色 #2E3138：' + [...new Set(fills)].join(','))
+  assert.ok(fills.includes('#B39B77'), '应有竹色 #B39B77')
+  assert.ok(fills.includes('#F1E7D4'), '应有米色书列 #F1E7D4')
+  const bamboo = rects.filter((r) => r.fill === '#B39B77')
+  assert.equal(bamboo.length, 3, '应是三片竹简，实际 ' + bamboo.length)
 })

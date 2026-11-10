@@ -102,8 +102,50 @@ window.__ModuleLoader__.load({
 
     const isZh = () => currentLocale === 'zh'
     const T2 = (key) => (currentLocale === 'zh' ? I18N.zh : I18N.en)[key] || key
-    const VERSION = '2.1.1'
+    const VERSION = '2.2.0'
     const KIND = 'chronicle'
+
+    /**
+     * 起居注图标：三片竹简（内联 SVG）。
+     *
+     * 几何与 icon.svg 完全一致 —— 那是同一张图的矢量版：
+     *   底板   x4 y4 w56 h56 rx7.2  #2E3138
+     *   竹片   x12.57/26.37/40.18  w11.26 h38.86  #B39B77
+     *   米色列 x16.08/29.88/43.69  w4.23 h19.04   #F1E7D4
+     *   小横条 y41.25 / y44.98                    #F1E7D4
+     *
+     * 为什么内联而不是 <img src="icon.svg">：
+     * 面板跑在 web 端，插件的静态文件没有公开 URL；内联 SVG 还能跟着
+     * 主题走 currentColor（这里只有底板与竹色是固定色，条纹用固定米色）。
+     *
+     * 宿主的两处用法：
+     *   · 指南卡片 entry.icon —— 不给就显示默认的 CubeGlyph 立方体占位符
+     *   · 标签 chip —— chip 里只有标题槽的内容，宿主自己不加图标
+     */
+    function ChronicleIcon({ size = 22, className }) {
+      const bars = []
+      const xs = [12.57, 26.37, 40.18]
+      const cx = [16.08, 29.88, 43.69]
+      for (let i = 0; i < 3; i += 1) {
+        bars.push(h('rect', { key: 'bar' + i, x: xs[i], y: 12.57, width: 11.26, height: 38.86, rx: 0.6, fill: '#B39B77' }))
+        bars.push(h('rect', { key: 'col' + i, x: cx[i], y: 16.42, width: 4.23, height: 19.04, fill: '#F1E7D4' }))
+        bars.push(h('rect', { key: 'r1' + i, x: cx[i], y: 41.25, width: 4.23, height: 2.15, fill: '#F1E7D4' }))
+        bars.push(h('rect', { key: 'r2' + i, x: cx[i], y: 44.98, width: 4.23, height: 2.15, fill: '#F1E7D4' }))
+      }
+      return h(
+        'svg',
+        {
+          width: size,
+          height: size,
+          viewBox: '0 0 64 64',
+          className,
+          'aria-hidden': 'true',
+          focusable: 'false',
+        },
+        h('rect', { x: 4, y: 4, width: 56, height: 56, rx: 7.2, fill: '#2E3138' }),
+        ...bars,
+      )
+    }
     const IMPL_ID = 'dsh-chronicle.panel'
 
     /** 全部走宿主主题 token；token 名取自 Theme.listTokens 的真实清单，带 fallback。 */
@@ -1340,7 +1382,8 @@ window.__ModuleLoader__.load({
                   keepMounted: true,
                   priority: 'extension',
                   title: () => T2('title'),
-                  guide: [{ id: KIND, order: 60, title: () => T2('title') }],
+                  // icon 必须给：不给的话宿主会用默认的 CubeGlyph（一个立方体占位符）
+                  guide: [{ id: KIND, order: 60, title: () => T2('title'), icon: ChronicleIcon }],
                 }),
               )
             } catch (error) {
@@ -1360,7 +1403,14 @@ window.__ModuleLoader__.load({
                 disposers.push(
                   ctx.slots.inject('sidebar.right.pane.tab.title', () =>
                     ctx.slots.register({ name: 'sidebar.right.pane.tab.title', key }, () =>
-                      h('span', { style: { fontSize: 12 } }, T2('title')),
+                      // 标签 chip 里只有这个槽的内容（宿主不加图标），
+                      // 所以「标签前的图标」就得自己画在这里。
+                      h(
+                        'span',
+                        { style: { display: 'inline-flex', alignItems: 'center', gap: 6 } },
+                        h(ChronicleIcon, { size: 16 }),
+                        h('span', { style: { fontSize: 12 } }, T2('title')),
+                      ),
                     ),
                   ),
                 )

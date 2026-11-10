@@ -1,5 +1,49 @@
 # CHANGELOG
 
+## 2.2.0 — 2026-11-10
+
+**侧栏里「起居注」标签前的那个图标，换成用户提供的三片竹简。**
+
+### 先查清了那个图标到底是谁画的
+
+宿主包里读出来（`dsh-client-ui-sidebar-right/lib/client.js` + dockkit）：
+
+```jsx
+// 标签 chip —— 只有标题槽的内容，宿主自己不加任何图标
+children: [ jsx(iw, { children: r.renderTabTitle?.(I) ?? I.title }), 关闭按钮 ]
+
+// 指南卡片 —— 不给 icon 就用默认的立方体占位符
+const Icon = entry.icon ?? CubeGlyph;
+jsx(Icon, { size: description === void 0 ? 22 : 26,
+             className: entry.icon === void 0 ? placeholderInk : void 0 })
+```
+
+标签类型注册（`sidebarRightTabs.register`）只有 `{id, kind, title, guide}`，**没有 icon 字段**；
+`icon` 只存在于 `guide[]` 条目里。
+
+所以那个图标有两条来路，两条都得由插件自己给：
+- 指南卡片 → 之前没给 `icon`，显示的是宿主的默认立方体占位符
+- 标签 chip → 宿主只渲染标题槽的内容，图标得自己画在标题槽里
+
+### 改法
+
+- 客户端新增 `ChronicleIcon` 组件：**内联 SVG**（几何与 `icon.svg` 逐值一致：
+  底板 `#2E3138` / 竹色 `#B39B77` / 米色 `#F1E7D4`）
+  - 不用 `<img src="icon.svg">`：面板跑在 web 端，插件静态文件没有公开 URL
+  - 内联还能跟着主题走
+- `guide[]` 条目加 `icon: ChronicleIcon`（22px）
+- 标题槽改成 `[<ChronicleIcon size=16/>, '起居注']`（16px）
+- `package.json` 补顶层 `icon: "./icon.svg"`（插件管理器/市场列表读它，
+  与 `dsh-better-sidebar` / `dsh-context` / `dsh-ops` 的写法一致）
+
+### 顺带修掉测试脚手架的一个 bug
+
+假 React 的 `createElement` 和 `renderToLog` 各 push 一次 `log.elements`，
+**每个元素记了两遍**——数量断言全部翻倍（3 片竹简数成 6）。
+之前没暴露是因为那些断言只查「在不在」，不查「有几个」。
+
+### 163 条测试全绿（新增 1 条：断言标题槽里真有竹简 SVG，三片、米色条纹都在）
+
 ## 2.1.1 — 2026-11-10
 
 **修图标：竖向竹简撑出了底板。**
