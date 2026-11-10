@@ -16,9 +16,8 @@ import { searchEntries, buildIdf, entryEntities } from '../lib/recall.js'
 import { renderRulesMarkdown, reviewCandidates, hasRealValue } from '../lib/rules.js'
 import { sectionOfKind } from '../lib/score.js'
 import { redactText } from '../lib/redact.js'
-import { catchUpDays, closeDecision, isValidCloseAt } from '../lib/time.js'
+import { settledDays } from '../lib/time.js'
 import { detectSupersedes, hasOppositeMarkers } from '../lib/supersede.js'
-import { previousDay } from '../lib/close.js'
 import { pickEntityPages, entitySlug, renderEntityPage } from '../lib/entitypages.js'
 import { closeAnsweredQuestions } from '../lib/supersede.js'
 
@@ -192,33 +191,8 @@ test('规则档必须产出 section，否则事实库永远为空', () => {
 
 /* ---------- P0-6 / P0-7 时间窗口 ---------- */
 
-test('补收口：更早的历史天不能被 lastClosedDay 挡掉', () => {
-  const days = catchUpDays({
-    now: new Date('2026-11-10T00:05:00+08:00').getTime(),
-    closeAt: '23:50',
-    lastClosedDay: '2026-11-09',
-    closedDays: ['2026-11-09'],
-    daysWithEvents: ['2026-11-05', '2026-11-06', '2026-11-07', '2026-11-08', '2026-11-09', '2026-11-10'],
-  })
-  assert.deepEqual(days.days, ['2026-11-05', '2026-11-06', '2026-11-07', '2026-11-08'])
-})
 
-test('收口决定：已在 closedDays 里的日子不重复收', () => {
-  const decision = closeDecision({
-    now: new Date('2026-11-09T23:52:00+08:00').getTime(),
-    closeAt: '23:50',
-    lastClosedDay: '2026-11-09',
-    closedDays: ['2026-11-09'],
-  })
-  assert.equal(decision.due, false)
-})
 
-test('前一天：跨月跨年都正确', () => {
-  assert.equal(previousDay('2026-11-09'), '2026-11-08')
-  assert.equal(previousDay('2026-11-01'), '2026-10-31')
-  assert.equal(previousDay('2026-01-01'), '2025-12-31')
-  assert.equal(previousDay('2027-01-01'), '2026-12-31')
-})
 
 /* ---------- P1-6 规则导出 ---------- */
 
@@ -271,12 +245,6 @@ test('孤儿事实页被归档到 _superseded/', async () => {
 
 /* ---------- closeAt 校验 ---------- */
 
-test('closeAt 校验：非法值能被发现', () => {
-  assert.equal(isValidCloseAt('23:50'), true)
-  assert.equal(isValidCloseAt('24:00'), false)
-  assert.equal(isValidCloseAt('bogus'), false)
-  assert.equal(isValidCloseAt(''), false)
-})
 
 /* ---------- P1-13 LLM 打分缓存 ---------- */
 
@@ -401,17 +369,67 @@ test('宿主激活：10 个工具都注册，且 output.schema 写实', async ()
   }
 })
 
-test('补收口：被 lookback 截掉的日子要报出来，不能静默丢（P2-9）', () => {
-  const many = Array.from({ length: 15 }, (_, i) => `2026-10-${String(i + 1).padStart(2, '0')}`)
-  const result = catchUpDays({
-    now: new Date('2026-11-10T09:00:00').getTime(),
-    closeAt: '23:50',
-    lastClosedDay: '2026-10-15',
+
+/* ---------- 方案 B：次日收昨天 ---------- */
+
+test('方案 B：今天永远不收，哪怕已经 23:59', () => {
+  const result = settledDays({
+    now: new Date('2026-11-09T23:59:00+08:00').getTime(),
+    daysWithEvents: ['2026-11-09'],
     closedDays: [],
-    daysWithEvents: many,
-    lookback: 5,
   })
-  assert.equal(result.days.length, 5, '只补最近 5 天')
-  assert.ok(result.dropped.length > 0, '被截掉的日子必须能看见，否则用户以为全补了')
-  assert.equal(result.days.length + result.dropped.length, 14, '合计等于全部待补天数')
+  assert.deepEqual(result.days, [], '当天还没过完，收了就不完整')
+})
+
+test('方案 B：跨过午夜后第一次 tick 就收昨天', () => {
+  const result = settledDays({
+    now: new Date('2026-11-10T00:05:00+08:00').getTime(),
+    daysWithEvents: ['2026-11-09', '2026-11-10'],
+    closedDays: [],
+  })
+  assert.deepEqual(result.days, ['2026-11-09'], '只收过完的那天')
+})
+
+test('方案 B：关机 5 天后开机，全部补齐（不受固定时刻影响）', () => {
+  const result = settledDays({
+    now: new Date('2026-11-10T09:00:00+08:00').getTime(),
+    daysWithEvents: ['2026-11-05', '2026-11-06', '2026-11-07', '2026-11-08', '2026-11-09'],
+    closedDays: [],
+  })
+  assert.deepEqual(result.days, ['2026-11-05', '2026-11-06', '2026-11-07', '2026-11-08', '2026-11-09'])
+})
+
+test('方案 B：已收口的天不重复收', () => {
+  const result = settledDays({
+    now: new Date('2026-11-10T09:00:00+08:00').getTime(),
+    daysWithEvents: ['2026-11-09'],
+    closedDays: ['2026-11-09'],
+    dayStamps: { '2026-11-09': 1000 },
+    closedStamps: { '2026-11-09': 1000 },
+  })
+  assert.deepEqual(result.days, [])
+})
+
+test('方案 B：收口后回捞补进新事件 ⇒ 必须重收（否则周文件是旧的）', () => {
+  const result = settledDays({
+    now: new Date('2026-11-10T09:00:00+08:00').getTime(),
+    daysWithEvents: ['2026-11-09'],
+    closedDays: ['2026-11-09'],
+    dayStamps: { '2026-11-09': 2000 },   // 事件文件在收口之后又变了
+    closedStamps: { '2026-11-09': 1000 },
+  })
+  assert.deepEqual(result.days, ['2026-11-09'])
+  assert.deepEqual(result.revisited, ['2026-11-09'], '要能区分「补收」和「重收」')
+})
+
+test('方案 B：lookback 截掉的天要报出来', () => {
+  const many = Array.from({ length: 40 }, (_, i) => `2026-09-${String(i + 1).padStart(2, '0')}`)
+  const result = settledDays({
+    now: new Date('2026-11-10T09:00:00+08:00').getTime(),
+    daysWithEvents: many,
+    closedDays: [],
+    lookback: 30,
+  })
+  assert.equal(result.days.length, 30)
+  assert.equal(result.dropped.length, 10, '被截掉的天必须能看见')
 })

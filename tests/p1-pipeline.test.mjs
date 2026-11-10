@@ -12,7 +12,7 @@ import { redactText } from '../lib/redact.js'
 import { buildTurns, condense } from '../lib/outline.js'
 import { ruleScore, scoreDay } from '../lib/score.js'
 import { renderWeek } from '../lib/render.js'
-import { dayKey, weekId, closeDecision, catchUpDays } from '../lib/time.js'
+import { dayKey, weekId, settledDays } from '../lib/time.js'
 import { eventToRow, prepareRow, EventBuffer } from '../lib/ingest.js'
 import { appendEvents, readEvents } from '../lib/store.js'
 import { createSerializer } from '../lib/serialize.js'
@@ -126,17 +126,19 @@ test('时间：日键与 ISO 周号', () => {
   const ms = new Date('2026-11-09T12:00:00').getTime()
   assert.equal(dayKey(ms), '2026-11-09')
   assert.match(weekId(ms), /^2026-W\d{2}$/)
-  const decision = closeDecision({ now: new Date('2026-11-09T23:55:00').getTime(), closeAt: '23:50', lastClosedDay: null })
-  assert.equal(decision.due, true)
-  const notYet = closeDecision({ now: new Date('2026-11-09T23:00:00').getTime(), closeAt: '23:50', lastClosedDay: null })
-  assert.equal(notYet.due, false)
-  const caught = catchUpDays({
-    now: new Date('2026-11-10T09:00:00').getTime(),
-    closeAt: '23:50',
-    lastClosedDay: '2026-11-07',
-    daysWithEvents: ['2026-11-07', '2026-11-08', '2026-11-09'],
+  // 方案 B：今天永远不收，只收已经过完的天
+  const tonight = settledDays({
+    now: new Date('2026-11-09T23:55:00').getTime(),
+    daysWithEvents: ['2026-11-09'],
+    closedDays: [],
   })
-  assert.deepEqual(caught.days, ['2026-11-08', '2026-11-09'])
+  assert.deepEqual(tonight.days, [], '当天还没过完，不能收')
+  const nextMorning = settledDays({
+    now: new Date('2026-11-10T09:00:00').getTime(),
+    daysWithEvents: ['2026-11-09'],
+    closedDays: [],
+  })
+  assert.deepEqual(nextMorning.days, ['2026-11-09'], '跨过午夜后收昨天')
 })
 
 /* ---------------- 事件归类 ---------------- */

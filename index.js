@@ -14,7 +14,7 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-import { dayKey, closeDecision, catchUpDays, weekId, isValidCloseAt } from './lib/time.js'
+import { dayKey, settledDays, weekId } from './lib/time.js'
 import { EventBuffer, prepareRow } from './lib/ingest.js'
 import { closeDay, previewDay } from './lib/close.js'
 import { scoreDayWithLlm } from './lib/llm.js'
@@ -37,6 +37,7 @@ import {
   ensureVault,
   writeAtomic,
   readMaybe,
+  eventDayStamps,
 } from './lib/store.js'
 import { createSerializer } from './lib/serialize.js'
 import { TOOL_SCHEMAS } from './lib/schemas.js'
@@ -61,7 +62,7 @@ export const inject = ['tools']
 /** 当前实现阶段。 */
 export const PHASE = 'P6'
 
-const VERSION = '1.3.0'
+const VERSION = '2.0.0'
 
 /** 每攒多少条事件就落一次盘。 */
 const FLUSH_EVENTS = 20
@@ -77,9 +78,8 @@ export const Config = Schema
       dataDir: Schema.string()
         .default('')
         .description('私有数据目录。留空 = $DSH_HOME/dsh-chronicle（无 DSH_HOME 时退到 ~/.dsh/dsh-chronicle）。'),
-      closeAt: Schema.string()
-        .default('23:50')
-        .description('当天收口时刻，HH:mm，本地时区。跨天由启动补偿兜底。'),
+      // closeAt 已移除（2026-11-10 方案 B）：收口不再挂在固定时刻。
+      // 旧配置里的 closeAt 会被忽略 —— ping 里会明确写「已弃用」。
       tickMinutes: Schema.number()
         .min(1)
         .max(60)
@@ -210,6 +210,8 @@ export function apply(ctx, config) {
   let lastError = ''
   // 被 lookback 截掉的待补收口日（P2-9：不能静默丢）
   let lastCatchUpDropped = []
+  // 已收口但因回捞补进新事件而需要重收的天
+  let lastRevisited = []
 
   async function getState() {
     if (!state) state = await readState(dataDir)
@@ -350,22 +352,19 @@ export function apply(ctx, config) {
       const s = await getState()
       const now = Date.now()
       const days = await listEventDays(dataDir)
-      const decision = closeDecision({
+      // 方案 B：只收「已经过完」的天（< 今天），跨过午夜后第一次 tick 就收昨天。
+      // 不再有 closeAt —— 固定时刻会把当天提前封掉，还留下 23:50–24:00 的缝隙。
+      const stamps = await eventDayStamps(dataDir)
+      const settled = settledDays({
         now,
-        closeAt: config.closeAt,
-        lastClosedDay: s.lastClosedDay,
-        closedDays: s.closedDays,
-      })
-      const catchUpResult = catchUpDays({
-        now,
-        closeAt: config.closeAt,
-        lastClosedDay: s.lastClosedDay,
-        closedDays: s.closedDays,
         daysWithEvents: days,
+        closedDays: s.closedDays,
+        dayStamps: stamps,
+        closedStamps: s.closedStamps,
       })
-      // 补收口目标；catchUp.dropped 是被 lookback 截掉的历史天，要在 ping 里报出来（P2-9）
-      lastCatchUpDropped = catchUpResult.dropped
-      const targets = [...new Set([...(decision.due ? [decision.day] : []), ...catchUpResult.days])]
+      lastCatchUpDropped = settled.dropped
+      lastRevisited = settled.revisited
+      const targets = settled.days
       if (targets.length === 0) {
         s.lastTickAt = now
         await writeState(dataDir, s)
@@ -381,6 +380,13 @@ export function apply(ctx, config) {
           if (result.closed) {
             if (!s.lastClosedDay || day > s.lastClosedDay) s.lastClosedDay = day
             s.lastClose = { day, week: result.week, at: now, reason }
+            // 记下收口那一刻的事件文件 mtime：之后回捞又补进事件 ⇒ 需要重收
+            if (stamps[day]) s.closedStamps = { ...(s.closedStamps || {}), [day]: stamps[day] }
+            // 只留最近 90 天的戳，别让 state 无限长
+            const keepFrom = dayKey(now - 90 * 86400000)
+            for (const key of Object.keys(s.closedStamps || {})) {
+              if (key < keepFrom) delete s.closedStamps[key]
+            }
             await writeState(dataDir, s)
           }
         }
@@ -600,12 +606,12 @@ export function apply(ctx, config) {
               text:
                 `dsh-chronicle ${value.phase} v${value.version}\n` +
                 `数据 ${value.dataDir}\n产物 ${value.vaultDir}\n` +
-                `收口 ${value.closeAt} · 门槛 ★${value.floor} · git 提交 ${value.gitCommit ? '开' : '关'}\n` +
+                `收口 次日首次启动收昨天（跨过午夜）· 门槛 ★${value.floor} · git 提交 ${value.gitCommit ? '开' : '关'}\n` +
                 `打分 ${value.scoring}${value.scoringTarget ? `（${value.scoringTarget}）` : '（无可用模型）'}\n` +
                 `面板 API ${value.routes && value.routes.ok ? `已注册 ${value.routes.disposers} 条` : `未注册（${(value.routes && value.routes.reason) || '无 webServer'}）`}\n` +
                 `回捞 ${renderBackfill(value.backfill)}\n` +
                 (value.llmError ? `⚠️ LLM 上次失败：${value.llmError}\n` : '') +
-                (value.closeAtValid === false ? '⚠️ closeAt 非法，已退回 23:50\n' : '') +
+                (Array.isArray(value.revisited) && value.revisited.length > 0 ? `重收 ${value.revisited.join('、')}（收口后回捞补进了新事件）\n` : '') +
                 `状态 上次收口 ${value.lastClosedDay || '（还没收过）'} · 缓冲 ${value.buffered} 条 · 今日 ${value.eventsToday} 条\n` +
                 `服务 ${marks}`,
             },
@@ -627,8 +633,8 @@ export function apply(ctx, config) {
           version: VERSION,
           dataDir,
           vaultDir,
-          closeAt: String(config.closeAt),
-          closeAtValid: isValidCloseAt(config.closeAt),
+          closeMode: 'next-day',
+          revisited: lastRevisited.slice(0, 10),
           floor: config.importanceFloor,
           scoring: String(config.scoring || 'rule'),
           routes: routeReport,
