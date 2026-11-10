@@ -108,6 +108,73 @@ dsh plugin --profile <你的 profile> add dsh-chronicle
 
 完整方案见 [`docs/PLAN.md`](docs/PLAN.md)；2026-11-10 的全量审计见 [`docs/AUDIT-2026-11-10.md`](docs/AUDIT-2026-11-10.md)（46 个问题与逐条修法）。
 
+## 发版（Releasing）
+
+### 日常发版：推 tag 即可
+
+```bash
+# 1) 改版本：package.json / index.js / client.js 的 VERSION / CHANGELOG / README 五处一致
+# 2) 提交
+git commit -am "rel: vX.Y.Z"
+git push
+
+# 3) 打 tag 并推 —— 这一步触发 CI 发布
+git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z
+```
+
+`publish.yml` 会：跑测试 → 探测 npm 上是否已有该版本（**有就跳过**，幂等）→ OIDC 发布 → 建 GitHub Release（附 tarball）。
+
+认证走 **OIDC Trusted Publishing**，仓库里不存任何 npm token。
+
+### 三个环境坑（本机实测）
+
+**① 本机默认 registry 是 npmmirror 镜像，不能发布**
+
+```
+registry = https://registry.npmmirror.com
+```
+
+但 `package.json` 的 `publishConfig.registry` 已写死官方源，所以 `npm publish` 会**自动走 registry.npmjs.org**，
+不需要手动加 `--registry`，也不会被镜像带偏。
+
+**② npm 账号与 GitHub 账号不是同一个**
+
+npm 是 `zhuoerbufan`，GitHub 是 `zuoyunlai`。配 Trusted Publisher 时填的是 **GitHub 的仓库信息**，
+与 npm 用户名无关。
+
+**③ 本机 `github.com:443` 不通，但 SSH（22）和 api.github.com 正常**
+
+```bash
+# 拉取/推送一律走 SSH
+git remote set-url origin git@github.com:zuoyunlai/dsh-chronicle.git
+```
+
+`git push` 走 https 会 21 秒超时。
+
+### 首次发布必须手动（npm 的已知限制）
+
+npm **不支持为尚不存在的包预配置 Trusted Publisher**——配置入口在
+`npmjs.com/package/<name>/settings`，包不存在就没有那个页面。
+见 [npm/documentation#1926](https://github.com/npm/documentation/issues/1926)（open）与
+[npm/cli#8544](https://github.com/npm/cli/issues/8544)（"first publish 不在 MVP 里"）。
+
+```bash
+npm login --registry=https://registry.npmjs.org/   # 浏览器流程
+npm publish                                        # 会提示输入 2FA 验证码
+```
+
+首发完成后，到 https://www.npmjs.com/package/dsh-chronicle/settings → Trusted publishing 添加：
+
+| 字段 | 值 |
+|---|---|
+| Provider | GitHub Actions |
+| Organization or user | `zuoyunlai` |
+| Repository | `dsh-chronicle` |
+| Workflow filename | `publish.yml` |
+| Environment | 留空 |
+
+之后所有版本都可以只靠推 tag。
+
 ## License
 
 MIT
