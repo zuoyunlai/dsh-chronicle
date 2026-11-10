@@ -74,7 +74,7 @@ export const inject = ['tools']
 /** 当前实现阶段。 */
 export const PHASE = 'P6'
 
-const VERSION = '2.2.0'
+const VERSION = '2.2.1'
 
 /** 每攒多少条事件就落一次盘。 */
 const FLUSH_EVENTS = 20
@@ -484,7 +484,9 @@ export function apply(ctx, config) {
           llm,
           provider: target.provider,
           model: target.model,
-          maxTokens: 8000,
+          // 预算按轮数给：8000 是写死的，42 轮时不够（实测输出被 maxTokens 截断，
+          // 整天的内容全丢退回规则分）。每轮约需 150–250 token 输出 + 思考开销。
+          maxTokens: Math.min(32000, 8000 + turns.length * 350),
           reasoningEffort,
         })
         llmError = ''

@@ -527,3 +527,57 @@ test('withTimeout：正常返回时不留悬挂定时器（不拖住进程退出
   assert.equal(value, 'ok')
   assert.ok(Date.now() - started < 500, '正常路径应立即返回，不该等超时')
 })
+
+/* ---------- LLM 截断抢救（2026-11-10 真实故障） ---------- */
+
+test('对象格式被截断：summary 与各数组能抢救出来', async () => {
+  const { salvageDigestObject, normalizeDigest } = await import('../lib/llm.js')
+  // 模拟 maxTokens 截断：对象没有收尾 }，最后一个数组也没有收尾 ]
+  const truncated = [
+    '{"summary":"今天主攻三片竹简图标，顺带发了 v2.2.0。",',
+    '"projects":[{"name":"dsh-chronicle","progress":"换图标","ref":"s1#3"}],',
+    '"decisions":[{"title":"用内联 SVG","decision":"不用 img","why":"没有公开 URL","ref":"s1#4"}],',
+    '"pitfalls":[{"title":"脚架双记","symptom":"3 片数成 6","rootCause":"两处 push","ref":"s1#5"}]',
+    // 故意缺 } 与 ]
+  ].join('')
+
+  const salvaged = salvageDigestObject(truncated)
+  assert.ok(salvaged, '应抢救出对象')
+  assert.match(salvaged.summary, /三片竹简图标/)
+  assert.equal(salvaged.projects.length, 1)
+  assert.equal(salvaged.projects[0].ref, 's1#3')
+  assert.equal(salvaged.decisions.length, 1)
+  assert.equal(salvaged.pitfalls.length, 1)
+
+  // 抢救结果必须能过 normalizeDigest（这是真正要的东西）
+  const digest = normalizeDigest(truncated, ['s1#3', 's1#4', 's1#5'])
+  assert.ok(digest, 'normalizeDigest 应接受被截断的文本')
+  assert.match(digest.summary, /三片竹简图标/)
+  assert.equal(digest.entries.length, 3, '三条都该救出来')
+  assert.ok(digest.sections.length >= 3, '四块结构应重建')
+  assert.equal(digest.salvaged, true, '应标记为抢救结果')
+})
+
+test('未截断时不该走抢救路径', async () => {
+  const { normalizeDigest } = await import('../lib/llm.js')
+  // 日结是硬要求（≥20 字），所以这里给一句够长的
+  const ok = '{"summary":"今天把侧栏图标换成了三片竹简，顺带修了测试脚手架的一个计数错误。","projects":[{"name":"P","progress":"x","ref":"s1#1"}]}'
+  const digest = normalizeDigest(ok, ['s1#1'])
+  assert.ok(digest)
+  assert.equal(digest.salvaged, undefined, '完整 JSON 不该标成抢救')
+  assert.equal(digest.entries.length, 1)
+})
+
+test('规则档也产出四块结构（之前只有 LLM 档有，自检因此误报）', async () => {
+  const { scoreDay } = await import('../lib/score.js')
+  const turns = [
+    { sid: 'a', seq: 1, ts: '2026-11-10T10:00:00+08:00', user: '部署到生产并删除旧数据', assistant: '', tools: [], files: ['x.js'], failures: 0, userChars: 12 },
+    { sid: 'a', seq: 2, ts: '2026-11-10T10:05:00+08:00', user: '查一下这个报错原因', assistant: '', tools: ['read'], files: [], failures: 0, userChars: 9 },
+  ]
+  const scored = scoreDay(turns)
+  assert.ok(Array.isArray(scored.sections), '规则档必须给出 sections')
+  assert.ok(scored.sections.length > 0, 'sections 不能为空')
+  for (const section of scored.sections) {
+    assert.ok(Array.isArray(section.refs) && section.refs.length > 0)
+  }
+})
