@@ -1156,13 +1156,25 @@ export function apply(ctx, config) {
   )
 
   /* ---------- 启动：先刷一次，再跑一次 tick（补偿漏掉的天） ---------- */
+  //
+  // 卸载标志：启动序列是异步的，apply() 返回后它还在写盘。
+  // 没有这个标志的话，用户在启动过程中禁用插件 → 它仍会往 vault 写文件
+  // （2026-11-10 实测：测试里 rm 临时目录撞 ENOTEMPTY）。
+  let disposed = false
+  ctx.effect(() => () => {
+    disposed = true
+  })
+
   void (async () => {
     try {
       await ensureVault(vaultDir)
+      if (disposed) return
       await flushNow()
+      if (disposed) return
       // 启动即开始后台回捞（不 await）：165 个候选要分很多批，不能挡启动
       void backfillLoop(dayKey(Date.now()))
       await runTick('boot')
+      if (disposed) return
       await refreshCorpus()
     } catch (error) {
       lastError = String(error?.message || error).slice(0, 300)

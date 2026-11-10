@@ -265,7 +265,7 @@ test('孤儿事实页被归档到 _superseded/', async () => {
     const archived = await readFile(join(vaultDir, 'facts', '_superseded', 'pitfall-old.md'), 'utf8')
     assert.equal(archived, 'old page', '孤儿页要归档而不是删除，保留可审计性')
   } finally {
-    await rm(vaultDir, { recursive: true, force: true })
+    await rm(vaultDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 })
   }
 })
 
@@ -300,7 +300,7 @@ test('打分缓存：命中缓存不再调模型，ref 集变了则作废', asyn
     const versionMiss = await readScoreCache(dataDir, '2026-11-09', 'v2', ['a#1'])
     assert.equal(versionMiss, null, 'prompt 版本变了缓存必须作废')
   } finally {
-    await rm(dataDir, { recursive: true, force: true })
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 })
   }
 })
 
@@ -396,7 +396,7 @@ test('宿主激活：10 个工具都注册，且 output.schema 写实', async ()
       try { dispose() } catch (error) { assert.fail('卸载抛错: ' + error.message) }
     }
   } finally {
-    await rm(dataDir, { recursive: true, force: true })
-    await rm(vaultDir, { recursive: true, force: true })
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 })
+    await rm(vaultDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 })
   }
 })
