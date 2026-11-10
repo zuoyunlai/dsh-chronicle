@@ -1,0 +1,88 @@
+name: ci
+
+# 日常 CI：每次 push / PR 都跑，用来在打 tag 之前就发现问题。
+# 发版流程见 publish.yml（只在 v* tag 上触发）。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # engines 声明是 ^22.19.0 || >=24.0.0，两端都测
+        node: ['22', '24']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: 安装 devDependencies
+        run: npm install --no-audit --no-fund
+
+      - name: 语法检查
+        run: npm run check
+
+      - name: 全部测试
+        run: npm test
+
+      - name: 版本一致性
+        run: |
+          set -e
+          V=$(node -p "require('./package.json').version")
+          I=$(grep -oP "const VERSION = '\K[^']+" index.js)
+          C=$(grep -oP "const VERSION = '\K[^']+" client.js)
+          echo "package.json=$V index.js=$I client.js=$C"
+          [ "$V" = "$I" ] || { echo "::error::index.js VERSION ($I) != package.json ($V)"; exit 1; }
+          [ "$V" = "$C" ] || { echo "::error::client.js VERSION ($C) != package.json ($V)"; exit 1; }
+          grep -q "^## $V" CHANGELOG.md || { echo "::error::CHANGELOG.md 缺 ## $V 条目"; exit 1; }
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: 打包并自检内容
+        run: |
+          set -e
+          npm pack --pack-destination /tmp
+          TGZ=$(ls /tmp/dsh-chronicle-*.tgz)
+          echo "== 顶层 =="
+          tar -tzf "$TGZ" | sed 's|^package/||' | cut -d/ -f1 | sort -u
+          tar -tzf "$TGZ" | grep -q '^package/tests/' && { echo "::error::测试目录不该进包"; exit 1; }
+          tar -tzf "$TGZ" | grep -qE '^package/(chronicle|entities|facts)/' && { echo "::error::数据目录混进包了"; exit 1; }
+          echo "tarball 干净"
+
+      - name: 解包后独立导入（证明不依赖仓库里的残余文件）
+        run: |
+          set -e
+          mkdir -p /tmp/standalone && tar -xzf /tmp/dsh-chronicle-*.tgz -C /tmp/standalone
+          cd /tmp/standalone/package
+          node --input-type=module -e "
+            const mod = await import('./index.js')
+            if (mod.name !== 'dsh-chronicle') { console.error('name 不对:', mod.name); process.exit(1) }
+            const tools = []
+            const ctx = {
+              tools: { register: (s) => { tools.push(s.name); return () => {} } },
+              on: () => () => {},
+              effect: (f) => { const d = f(); return typeof d === 'function' ? d : () => {} },
+              inject: (l, cb) => (cb ? cb({ get: (k) => (l.includes(k) ? ctx[k] : undefined) }) : undefined),
+              get: (k) => ctx[k],
+            }
+            mod.apply(ctx, { dataDir: '/tmp/standalone/d', vaultDir: '/tmp/standalone/v' })
+            if (tools.length !== 10) { console.error('工具数不对:', tools.length); process.exit(1) }
+            console.log('独立安装可用：', tools.length, '个工具')
+          "

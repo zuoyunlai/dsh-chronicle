@@ -1,0 +1,159 @@
+name: publish
+
+# 发版：打 tag（v*）→ 跑测试 → 发布 npm → 建 GitHub Release。
+#
+# ## 认证：OIDC Trusted Publishing（不存任何 npm token）
+#
+# 你的 npm 账号要求 2FA 且禁止 bypass token ⇒ 普通的 NPM_TOKEN secret 发不出去。
+# 唯一可行的是 OIDC：GitHub 生成短期令牌，npm 校验「这个 repo + 这个 workflow 文件」。
+#
+# ## 首发必须手动（npm 的已知限制）
+#
+# npm **不支持为尚不存在的包预配置 Trusted Publisher**——
+#   配置入口在 npmjs.com/package/<name>/settings，包不存在就没有那个页面。
+#   官方 issue npm/documentation#1926（open）、npm/cli#8544（"first publish 不在 MVP 里"）。
+#
+# 所以顺序是：
+#   ① 本地手动发首版（带 2FA 验证码）：npm publish
+#   ② 到 npm 包设置里加 Trusted Publisher：repo=zuoyunlai/dsh-chronicle, workflow=publish.yml, env=（留空）
+#   ③ 之后每次推 tag 都由本 workflow 自动发
+#
+# ## 幂等
+#
+# 版本已在 npm 上存在时跳过 publish 直接进 release。
+# 这样「手动发过首版再推 tag」不会因为 E409 把 release 一起带红
+# （publish.yml 的 release 作业 needs: publish ⇒ publish 红则 Release 静默缺失）。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag（如 v2.0.2）'
+        required: true
+
+permissions:
+  contents: write      # 建 Release
+  id-token: write       # OIDC：换取 npm 短期发布令牌
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: 安装 devDependencies（只有 schemastery）
+        run: npm install --no-audit --no-fund
+
+      - name: 语法检查
+        run: npm run check
+
+      - name: 全部测试
+        run: npm test
+
+      - name: 版本一致性（package.json / index.js / client.js / CHANGELOG）
+        run: |
+          set -e
+          V=$(node -p "require('./package.json').version")
+          I=$(grep -oP "const VERSION = '\K[^']+" index.js)
+          C=$(grep -oP "const VERSION = '\K[^']+" client.js)
+          echo "package.json=$V index.js=$I client.js=$C"
+          [ "$V" = "$I" ] || { echo "::error::index.js VERSION ($I) != package.json ($V)"; exit 1; }
+          [ "$V" = "$C" ] || { echo "::error::client.js VERSION ($C) != package.json ($V)"; exit 1; }
+          grep -q "^## $V" CHANGELOG.md || { echo "::error::CHANGELOG.md 缺 ## $V 条目"; exit 1; }
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "v$V" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} 与版本 v$V 不一致"; exit 1
+          fi
+
+      - name: 打包自检（tarball 必须不含测试与杂数据）
+        run: |
+          set -e
+          npm pack --pack-destination /tmp
+          TGZ=$(ls /tmp/dsh-chronicle-*.tgz)
+          echo "== tarball 顶层 =="
+          tar -tzf "$TGZ" | sed 's|^package/||' | cut -d/ -f1 | sort -u
+          tar -tzf "$TGZ" | grep -q '^package/tests/' && { echo "::error::测试目录不该进包"; exit 1; }
+          tar -tzf "$TGZ" | grep -qE '^package/(chronicle|entities|facts)/' && { echo "::error::数据目录混进包了"; exit 1; }
+          echo "tarball 干净"
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    outputs:
+      published: ${{ steps.attempt.outputs.published }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: 该版本是否已存在于 npm
+        id: probe
+        run: |
+          V=$(node -p "require('./package.json').version")
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          if npm view "dsh-chronicle@$V" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "npm 上已有 $V，跳过发布（幂等）"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 发布到 npm（OIDC）
+        id: attempt
+        if: steps.probe.outputs.exists == 'false'
+        run: |
+          npm publish --access public --provenance
+          echo "published=true" >> "$GITHUB_OUTPUT"
+
+      - name: 已存在则标记为已发布
+        if: steps.probe.outputs.exists == 'true'
+        run: echo "published=true" >> "$GITHUB_OUTPUT"
+
+  release:
+    # 只有 publish 成功才建 Release —— 否则会出现「npm 有版本、GitHub 无 Release」
+    needs: [verify, publish]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: 取版本号
+        id: v
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: 打包
+        run: npm pack --pack-destination dist
+
+      - name: 建 Release（幂等：已存在则只补资产）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          V="${{ steps.v.outputs.version }}"
+          TGZ="dist/dsh-chronicle-$V.tgz"
+          SHA=$(sha1sum "$TGZ" | cut -d' ' -f1)
+          echo "tarball sha1=$SHA"
+          if gh release view "v$V" >/dev/null 2>&1; then
+            echo "Release v$V 已存在，补充资产"
+            gh release upload "v$V" "$TGZ" --clobber
+          else
+            gh release create "v$V" "$TGZ" --title "v$V" --generate-notes
+          fi

@@ -22,7 +22,6 @@
     "cordis.patch.yml",
     "icon.svg",
     "locale",
-    "tests/",
     "docs/PLAN.md",
     "README.md",
     "CHANGELOG.md",
@@ -92,5 +91,13 @@
   "scripts": {
     "check": "node --check index.js && node --check client.js",
     "test": "node --test tests/"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zuoyunlai/dsh-chronicle.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zuoyunlai/dsh-chronicle/issues"
+  },
+  "homepage": "https://github.com/zuoyunlai/dsh-chronicle#readme"
 }
