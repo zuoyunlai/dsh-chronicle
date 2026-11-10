@@ -226,7 +226,10 @@ test('规则文案：expiresWhen 已是完整句子时不再叠"时重评"', () 
   const md = renderRulesMarkdown(facts, { generatedAt: DAY })
   assert.ok(md.includes('扩展为通用知识库时重新评估）'), md)
   assert.ok(!md.includes('重新评估 时重评'), '不该叠加')
-  assert.ok(md.includes('看到「X 就查 Y」'), 'detector 的前缀"看到"应被剥掉，避免叠两层：' + md)
+  // 「看到」前缀要剥掉；内层「就查」要改成「时查」，
+  // 否则输出成「看到「X 就查 Y」→ 先查：乙」叠两层「查」（审计 P1-10）
+  assert.ok(md.includes('看到「X 时查 Y」'), 'detector 的前缀"看到"应被剥掉、内层"就查"应改为"时查"：' + md)
+  assert.ok(!md.includes('就查'), '内层"就查"不该残留：' + md)
 })
 
 test('mergeProjects 不能丢掉挂在数组上的日结与四块（0.11.0 实测回归）', () => {

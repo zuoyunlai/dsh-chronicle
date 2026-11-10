@@ -1,6 +1,6 @@
 {
   "name": "dsh-chronicle",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "起居注：把 DeepSeek Harness 里的对话收口成可审、可检索、可关联的 Markdown 编年史 + 事实库。零第三方依赖，产物是 Obsidian 可直接打开的独立 vault。",
   "type": "module",
   "main": "index.js",

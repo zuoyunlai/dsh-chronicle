@@ -62,7 +62,7 @@ export const inject = ['tools']
 /** 当前实现阶段。 */
 export const PHASE = 'P6'
 
-const VERSION = '2.0.1'
+const VERSION = '2.0.2'
 
 /** 每攒多少条事件就落一次盘。 */
 const FLUSH_EVENTS = 20
@@ -1150,7 +1150,10 @@ export function apply(ctx, config) {
       async execute(args) {
         const facts = await readFacts(dataDir)
         const generatedAt = dayKey(Date.now())
-        const markdown = renderRulesMarkdown(facts, { generatedAt })
+        const markdown = renderRulesMarkdown(facts, {
+          generatedAt,
+          project: typeof args?.project === 'string' ? args.project.trim() : '',
+        })
         let path = ''
         // write 默认开：闭环的产物必须真的落盘，否则「规则导出」只是屏幕上的字
         if (args?.write !== false) {

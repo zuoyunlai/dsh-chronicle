@@ -478,3 +478,28 @@ test('实体页：自己从 graph/entities.json 读，不靠调用方传 graph�
     await rm(vaultDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 })
   }
 })
+
+/* ---------- P1-16 规则导出按项目分节 ---------- */
+
+test('规则导出：按项目分节，通用条目排最前', () => {
+  const facts = [
+    { id: 'a', kind: 'convention', title: '通用约定', statement: 's', project: '', status: 'single', bornOn: '2026-11-09' },
+    { id: 'b', kind: 'convention', title: '插件约定', statement: 's', project: 'dsh-chronicle', status: 'single', bornOn: '2026-11-09' },
+    { id: 'c', kind: 'convention', title: '别的项目', statement: 's', project: 'wsl', status: 'single', bornOn: '2026-11-09' },
+  ]
+  const md = renderRulesMarkdown(facts, { generatedAt: '2026-11-10' })
+  const heads = md.split('\n').filter((line) => line.startsWith('### '))
+  assert.deepEqual(heads, ['### 通用', '### 项目：dsh-chronicle', '### 项目：wsl'], '通用必须排最前：' + heads.join(' | '))
+})
+
+test('规则导出：指定 project 时只留该项目 + 通用条目', () => {
+  const facts = [
+    { id: 'a', kind: 'convention', title: '通用约定', statement: 's', project: '', status: 'single', bornOn: '2026-11-09' },
+    { id: 'b', kind: 'convention', title: '插件约定', statement: 's', project: 'dsh-chronicle', status: 'single', bornOn: '2026-11-09' },
+    { id: 'c', kind: 'convention', title: '别的项目', statement: 's', project: 'wsl', status: 'single', bornOn: '2026-11-09' },
+  ]
+  const md = renderRulesMarkdown(facts, { generatedAt: '2026-11-10', project: 'dsh-chronicle' })
+  assert.ok(md.includes('插件约定'), md)
+  assert.ok(md.includes('通用约定'), '通用条目任何项目都该带上')
+  assert.ok(!md.includes('别的项目'), '指定项目时不该混进其它项目：' + md)
+})
