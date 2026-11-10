@@ -374,7 +374,7 @@ test('宿主激活：10 个工具都注册，且 output.schema 写实', async ()
 
 test('方案 B：今天永远不收，哪怕已经 23:59', () => {
   const result = settledDays({
-    now: new Date('2026-11-09T23:59:00+08:00').getTime(),
+    now: new Date(2026, 10, 9, 23, 59).getTime(),
     daysWithEvents: ['2026-11-09'],
     closedDays: [],
   })
@@ -383,7 +383,7 @@ test('方案 B：今天永远不收，哪怕已经 23:59', () => {
 
 test('方案 B：跨过午夜后第一次 tick 就收昨天', () => {
   const result = settledDays({
-    now: new Date('2026-11-10T00:05:00+08:00').getTime(),
+    now: new Date(2026, 10, 10, 0, 5).getTime(),
     daysWithEvents: ['2026-11-09', '2026-11-10'],
     closedDays: [],
   })
@@ -392,7 +392,7 @@ test('方案 B：跨过午夜后第一次 tick 就收昨天', () => {
 
 test('方案 B：关机 5 天后开机，全部补齐（不受固定时刻影响）', () => {
   const result = settledDays({
-    now: new Date('2026-11-10T09:00:00+08:00').getTime(),
+    now: new Date(2026, 10, 10, 9, 0).getTime(),
     daysWithEvents: ['2026-11-05', '2026-11-06', '2026-11-07', '2026-11-08', '2026-11-09'],
     closedDays: [],
   })
@@ -401,7 +401,7 @@ test('方案 B：关机 5 天后开机，全部补齐（不受固定时刻影响
 
 test('方案 B：已收口的天不重复收', () => {
   const result = settledDays({
-    now: new Date('2026-11-10T09:00:00+08:00').getTime(),
+    now: new Date(2026, 10, 10, 9, 0).getTime(),
     daysWithEvents: ['2026-11-09'],
     closedDays: ['2026-11-09'],
     dayStamps: { '2026-11-09': 1000 },
@@ -412,7 +412,7 @@ test('方案 B：已收口的天不重复收', () => {
 
 test('方案 B：收口后回捞补进新事件 ⇒ 必须重收（否则周文件是旧的）', () => {
   const result = settledDays({
-    now: new Date('2026-11-10T09:00:00+08:00').getTime(),
+    now: new Date(2026, 10, 10, 9, 0).getTime(),
     daysWithEvents: ['2026-11-09'],
     closedDays: ['2026-11-09'],
     dayStamps: { '2026-11-09': 2000 },   // 事件文件在收口之后又变了
@@ -425,7 +425,7 @@ test('方案 B：收口后回捞补进新事件 ⇒ 必须重收（否则周文�
 test('方案 B：lookback 截掉的天要报出来', () => {
   const many = Array.from({ length: 40 }, (_, i) => `2026-09-${String(i + 1).padStart(2, '0')}`)
   const result = settledDays({
-    now: new Date('2026-11-10T09:00:00+08:00').getTime(),
+    now: new Date(2026, 10, 10, 9, 0).getTime(),
     daysWithEvents: many,
     closedDays: [],
     lookback: 30,
