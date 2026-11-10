@@ -1,5 +1,65 @@
 # CHANGELOG
 
+## 1.1.4 — 2026-11-10
+
+**真正的启动失败根因找到了**（1.1.1 修的那三个客户端 bug 是真的，但不是致命原因）。
+
+### 根因：我写的 `output.schema` 用了宿主不支持的 JSON Schema 构造
+
+崩溃日志只写 `import failed`，看不出细节。用 `plugin_manager install_bundle` 重装时，
+宿主把真实诊断吐出来了：
+
+```
+JsonSchemaError: unsupported JSON schema:
+  schema.properties.scoringTarget.type must be a single type string (type arrays are not supported)
+  schema.properties.lastClosedDay.type must be a single type string (type arrays are not supported)
+  schema.properties.lastError.type must be a single type string (type arrays are not supported)
+  schema.properties.llmError.type must be a single type string (type arrays are not supported)
+  schema.properties.services.additionalProperties must be a boolean
+  schema.properties.backfill.type must be a single type string (type arrays are not supported)
+```
+
+**是我为审计 P2-18「把 output.schema 写实」引入的。** 我用了
+`type: ['string','null']`（联合类型）和 `additionalProperties: { type: 'boolean' }`，
+DSH 都不支持。原来的空壳 `properties: {}` 反而能过——**「更严格」在别的校验器里可能是非法的**。
+
+修法：全部改成单一 `type` + 布尔 `additionalProperties`。
+
+### 第二层：schema 写实后，宿主会**真的按它校验输出**
+
+重启后立刻撞上：
+
+```
+tool "chronicle_ping" returned invalid output: "value.lastError" must be a string
+```
+
+因为 ping 返回 `lastError: null`，而 schema 声明 `type: 'string'`。同类问题还有：
+
+- `chronicle_doctor.weekFile` 实际是 boolean，schema 写成 string
+- `chronicle_doctor.lastClosedDay` 返回 null
+- `chronicle_close` 的 `dryRun` 预览没有 `closed` 字段，却被列为 required
+
+全部修成：可空字段一律返回字符串、类型对齐实际值、非必需字段不进 required。
+
+### 补上两层验证（这是根本）
+
+新增 `tests/p10-schema.test.mjs`：
+
+1. **本地复刻宿主校验器**：`type` 必须是单个字符串、`additionalProperties` 必须是布尔
+2. **10 个工具的 schema 逐个过校验器**
+3. **10 个工具的实际输出逐个过自己的 schema**（真的调 `execute()`）
+
+第 3 条正是这次漏掉的环节——**schema 与输出必须双向验证**，只验 schema 合规不够。
+
+### 另外：插件被 DSH 自动摘掉了
+
+崩溃后 DSH 于 15:08 把 `dsh-chronicle` 从 profile 的
+`dependencies` / `dsh.profile.bundles` / `cordis.patch.yml` 里全部移除（自保护行为）。
+所以第二次重启时 `chronicle_ping` 是 `unknown tool` —— 不是代码问题，是**插件根本没被加载**。
+已用 `plugin_manager install_bundle` 重新装回。
+
+### 151 条测试全绿
+
 ## 1.1.1 — 2026-11-10
 
 **用户重启后 DSH 启动失败。** 崩溃日志：

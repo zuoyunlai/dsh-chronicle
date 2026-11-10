@@ -61,7 +61,7 @@ export const inject = ['tools']
 /** 当前实现阶段。 */
 export const PHASE = 'P6'
 
-const VERSION = '1.1.1'
+const VERSION = '1.1.4'
 
 /** 每攒多少条事件就落一次盘。 */
 const FLUSH_EVENTS = 20
@@ -603,18 +603,18 @@ export function apply(ctx, config) {
           floor: config.importanceFloor,
           scoring: String(config.scoring || 'rule'),
           routes: routeReport,
-          backfill: lastBackfill,
-          llmError: llmError || null,
+          backfill: lastBackfill || {},
+          llmError: llmError || '',
           scoringTarget: (() => {
             const target = scoringTarget()
-            return target ? `${target.provider}/${target.model}` : null
+            return target ? `${target.provider}/${target.model}` : ''
           })(),
           gitCommit: Boolean(config.gitCommit),
           weekFile: Boolean(config.weekFile),
-          lastClosedDay: s.lastClosedDay || null,
+          lastClosedDay: s.lastClosedDay || '',
           buffered: buffer.size(),
           eventsToday,
-          lastError: lastError || null,
+          lastError: lastError || '',
           services: probeServices(ctx),
         }
       },
