@@ -503,3 +503,27 @@ test('规则导出：指定 project 时只留该项目 + 通用条目', () => {
   assert.ok(md.includes('通用约定'), '通用条目任何项目都该带上')
   assert.ok(!md.includes('别的项目'), '指定项目时不该混进其它项目：' + md)
 })
+
+/* ---------- CI 抓出的真 bug：超时定时器不能 unref ---------- */
+
+test('withTimeout：没有任何其它句柄时也必须触发超时', async () => {
+  const { withTimeout } = await import('../lib/backfill.js')
+  const never = new Promise(() => {})
+  const started = Date.now()
+  await assert.rejects(
+    () => withTimeout(never, 120, 'slow'),
+    /超时 120ms/,
+    '超时定时器 unref 之后，如果它是唯一待办句柄，事件循环会先变空、进程直接退出，超时永远不触发',
+  )
+  const used = Date.now() - started
+  assert.ok(used >= 100, `应该在 ~120ms 后触发，实际 ${used}ms`)
+  assert.ok(used < 3000, `不该拖太久，实际 ${used}ms`)
+})
+
+test('withTimeout：正常返回时不留悬挂定时器（不拖住进程退出）', async () => {
+  const { withTimeout } = await import('../lib/backfill.js')
+  const started = Date.now()
+  const value = await withTimeout(Promise.resolve('ok'), 5000, 'fast')
+  assert.equal(value, 'ok')
+  assert.ok(Date.now() - started < 500, '正常路径应立即返回，不该等超时')
+})
