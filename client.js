@@ -30,26 +30,30 @@ window.__ModuleLoader__.load({
     const I18N = {
       zh: {
         recent: '近期', search: '检索', related: '关联', facts: '事实', arcs: '线索', graph: '图谱',
-        loading: T2('loading'), loadingGraph: T2('loadingGraph'), emptyGraph: T2('emptyGraph'),
-        emptyFacts: T2('emptyFacts'),
-        emptyArcs: T2('emptyArcs'),
+        loading: '读取中…', loadingGraph: '载入中…',
+        emptyGraph: '还没有实体：收口一次之后才会有图。',
+        emptyFacts: '事实库还是空的：收口一次之后才会产出。',
+        emptyArcs: '还没有跨天线索：同一件事至少要在两天里出现过。',
         emptyRecent: '还没有记录。', emptySearch: '没命中。换个词，或先收口几天。',
-        factsHint: T2('factsHint'),
-        arcsHint: T2('arcsHint'), graphHint: T2('graphHint'),
-        facts: T2('facts'), arcs: T2('arcs'), legend: '绿=结论与坑 · 黄=项目 · 褐=文件',
+        factsHint: '不随日期过期的结论：约定 / 决策 / 坑（含判别信号）',
+        arcsHint: '同一件事被追了几天',
+        graphHint: '实体关系图：谁和谁一起出现',
+        legend: '绿=结论与坑 · 黄=项目 · 褐=文件',
         hint: '滚轮缩放 / 拖背景平移 / 拖节点 / 双击复位',
-        focus: T2('focus'), clear: T2('clear'), error: T2('error'), retry: T2('retry'),
-        title: T2('title'),
+        focus: '聚焦：', clear: '清除', error: '起居注面板出错：', retry: '重试',
+        title: '起居注',
       },
       en: {
         recent: 'Recent', search: 'Search', related: 'Related', facts: 'Facts', arcs: 'Threads', graph: 'Graph',
-        loading: 'Loading…', loadingGraph: 'Loading…', emptyGraph: 'No entities yet — close a day first.',
+        loading: 'Loading…', loadingGraph: 'Loading…',
+        emptyGraph: 'No entities yet — close a day first.',
         emptyFacts: 'Fact library is empty — close a day first.',
         emptyArcs: 'No cross-day threads yet — a thread needs at least two days.',
         emptyRecent: 'Nothing recorded yet.', emptySearch: 'No hit. Try other words, or close a few days first.',
         factsHint: 'Conclusions that do not expire: conventions / decisions / pitfalls',
-        arcsHint: 'Things that took several days', graphHint: 'Entity graph: what shows up together',
-        facts: 'Fact breakdown', arcs: 'Cross-day threads', legend: 'green=conclusions · amber=projects · brown=files',
+        arcsHint: 'Things that took several days',
+        graphHint: 'Entity graph: what shows up together',
+        legend: 'green=conclusions · amber=projects · brown=files',
         hint: 'wheel=zoom · drag=pan · drag node · double-click=reset',
         focus: 'Focus: ', clear: 'clear', error: 'Chronicle panel error: ', retry: 'Retry',
         title: 'Chronicle',
@@ -57,7 +61,7 @@ window.__ModuleLoader__.load({
     }
     const isZh = !/^en/i.test(String((typeof navigator !== 'undefined' && navigator.language) || 'zh'))
     const T2 = (key) => (isZh ? I18N.zh : I18N.en)[key] || key
-    const VERSION = '1.1.0'
+    const VERSION = '1.1.1'
     const KIND = 'chronicle'
     const IMPL_ID = 'dsh-chronicle.panel'
 
@@ -520,8 +524,17 @@ window.__ModuleLoader__.load({
           {
             viewBox: `0 0 ${width} ${height}`,
             width: '100%',
-            height: 'auto',
-            style: { display: 'block', background: T.chip, borderRadius: 8, marginTop: 4, touchAction: 'none', cursor: 'grab' },
+            // 高度交给 CSS：`height="auto"` 是无效的 SVG 属性，
+            // 浏览器每次渲染都会报 "Expected length, auto"（实测刷屏 8 条）
+            style: {
+              display: 'block',
+              height: 'auto',
+              background: T.chip,
+              borderRadius: 8,
+              marginTop: 4,
+              touchAction: 'none',
+              cursor: 'grab',
+            },
             onWheel: (event) => {
               const factor = event.deltaY > 0 ? 0.9 : 1.1
               setView((value) => ({ ...value, k: Math.max(0.4, Math.min(3, value.k * factor)) }))

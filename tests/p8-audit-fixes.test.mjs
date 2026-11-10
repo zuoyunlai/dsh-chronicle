@@ -361,3 +361,42 @@ test('问题生命周期：答案早于问题不算回答', () => {
   assert.equal(closeAnsweredQuestions(facts), 0, '答案不能早于问题')
   assert.equal(facts[0].status, 'single')
 })
+
+/* ---------- P2-18 工具 output.schema 不能是空壳 ---------- */
+
+test('宿主激活：10 个工具都注册，且 output.schema 写实', async () => {
+  const plugin = await import('../index.js')
+  const tools = []
+  const disposers = []
+  const ctx = {
+    tools: { register: (spec) => { tools.push(spec); return () => {} } },
+    on: () => () => {},
+    effect: (fn) => { const d = fn(); if (typeof d === 'function') disposers.push(d); return d || (() => {}) },
+    inject: (list, cb) => (cb ? cb({ get: (k) => (list.includes(k) ? ctx[k] : undefined) }) : undefined),
+    get: (k) => ctx[k],
+  }
+  const dataDir = await mkdtemp(join(tmpdir(), 'chronicle-boot-d-'))
+  const vaultDir = await mkdtemp(join(tmpdir(), 'chronicle-boot-v-'))
+  try {
+    plugin.apply(ctx, {
+      dataDir, vaultDir, closeAt: '23:50', tickMinutes: 5, importanceFloor: 3, scoring: 'rule',
+      entityRule: 'on-hit', entityMinScore: 4, gitCommit: false, injectLine: true, injectBudget: 80,
+      redact: true, maxEventsPerDay: 5000, includeSubagent: false, followModel: true, scoringModel: '',
+      weekFile: true, panel: true, keepDays: 0,
+    })
+    assert.equal(tools.length, 10, '应该注册 10 个工具')
+    for (const tool of tools) {
+      assert.ok(tool.output, tool.name + ' 缺 output')
+      assert.equal(typeof tool.output.render, 'function', tool.name + ' 缺 output.render')
+      const props = tool.output.schema && tool.output.schema.properties
+      assert.ok(props && Object.keys(props).length > 0, tool.name + ' 的 output.schema 是空壳')
+    }
+    // 卸载路径不能抛
+    for (const dispose of disposers) {
+      try { dispose() } catch (error) { assert.fail('卸载抛错: ' + error.message) }
+    }
+  } finally {
+    await rm(dataDir, { recursive: true, force: true })
+    await rm(vaultDir, { recursive: true, force: true })
+  }
+})

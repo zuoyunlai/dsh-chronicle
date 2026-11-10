@@ -1,5 +1,56 @@
 # CHANGELOG
 
+## 1.1.1 — 2026-11-10
+
+**用户重启后 DSH 启动失败。** 崩溃日志：
+
+```
+Error: web boot: 1 entry did not activate
+dsh-chronicle: import failed (see console for the import error)
+
+--- renderer console ---
+Error: <svg> attribute height: Expected length, "auto".   ← 8 条
+ReferenceError: focusOn is not defined
+```
+
+### 根因
+
+**你在 15:03 重启时，我正改到一半** —— 编辑过程中的代码处于不一致状态
+（`onSelect: focusOn` 已写入、`focusOn` 还没定义），抓到了中间态。
+这是我的错：**改客户端代码期间没有告知「先别重启」**。
+
+### 抓到三个真 bug（都已修）
+
+1. **`<svg height="auto">`** —— 无效 SVG 属性，浏览器每帧报错。
+   高度必须交给 CSS（`style.height = 'auto'`），不能作为 SVG 属性。
+2. **I18N 表自引用 TDZ** —— 我用全局替换把 `'起居注'` → `T2('title')`，
+   连 `I18N.zh` 表**内部**的 `title: '起居注'` 也被替换成 `T2('title')`，
+   于是 `const T2` 初始化前就引用了自己 → `Cannot access 'T2' before initialization`。
+   重写了整张表（表内只放字面量，只有 UI 代码调 `T2()`）。
+3. **`focusOn is not defined`** —— 中间态造成，当前代码中 `focusOn`
+   在 Panel 作用域内正确声明（901/914 行）。
+
+### 补上客户端测试（这是根本原因）
+
+**客户端 1152 行此前零测试**，所以「引用了不存在的变量」「给 SVG 传无效属性」
+这类错误只有等重启才能发现。新增 `tests/p9-client.test.mjs`：
+
+- 桩掉 `window.__ModuleLoader__` 拿 factory，用最小 React 实现（useState/useCallback/useRef/useEffect）
+- 递归渲染整棵组件树（含 class 组件），**渲染期错误直接抛出**
+- 断言：无 `<svg height="auto">`、tab 与正文槽双 key 注册、I18N 中英键集一致
+
+实测这三条断言**正好**能抓住本次的三个 bug。
+
+### 另外补上宿主激活测试
+
+模拟宿主 `apply()`：断言 10 个工具全部注册、`output.schema` 非空壳、卸载路径不抛错。
+
+146 条测试全绿。
+
+### 教训
+
+**客户端改动必须有能真跑渲染的测试，否则等于把验证推给用户的一次重启。**
+
 ## 1.1.0 — 2026-11-10
 
 补齐 1.0.0 遗漏的 13 项（我上次声称「全部修订完成」是过头了，实际只做了约三分之二）。
