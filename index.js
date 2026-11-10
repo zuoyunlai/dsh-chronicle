@@ -61,7 +61,7 @@ export const inject = ['tools']
 /** 当前实现阶段。 */
 export const PHASE = 'P6'
 
-const VERSION = '1.1.5'
+const VERSION = '1.2.0'
 
 /** 每攒多少条事件就落一次盘。 */
 const FLUSH_EVENTS = 20
@@ -208,6 +208,8 @@ export function apply(ctx, config) {
   let state = null
   let closing = false
   let lastError = ''
+  // 被 lookback 截掉的待补收口日（P2-9：不能静默丢）
+  let lastCatchUpDropped = []
 
   async function getState() {
     if (!state) state = await readState(dataDir)
@@ -354,14 +356,16 @@ export function apply(ctx, config) {
         lastClosedDay: s.lastClosedDay,
         closedDays: s.closedDays,
       })
-      const catchUp = catchUpDays({
+      const catchUpResult = catchUpDays({
         now,
         closeAt: config.closeAt,
         lastClosedDay: s.lastClosedDay,
         closedDays: s.closedDays,
         daysWithEvents: days,
       })
-      const targets = [...new Set([...(decision.due ? [decision.day] : []), ...catchUp])]
+      // 补收口目标；catchUp.dropped 是被 lookback 截掉的历史天，要在 ping 里报出来（P2-9）
+      lastCatchUpDropped = catchUpResult.dropped
+      const targets = [...new Set([...(decision.due ? [decision.day] : []), ...catchUpResult.days])]
       if (targets.length === 0) {
         s.lastTickAt = now
         await writeState(dataDir, s)
@@ -528,15 +532,24 @@ export function apply(ctx, config) {
   //
   // 用 ctx.inject 而不是一次性 ctx.get（审计 P2-6）：服务晚到时能自愈。
   // 拿不到就退化为"只在启动时跑一次 tick"，插件仍然可用。
-  ctx.effect(() =>
-    ctx.inject(['timer'], (injected) => {
+  ctx.effect(() => {
+    // 两种语义下都要正确（审计 P2-14）：
+    //   a) cordis 会把回调的返回值也登记成 effect ⇒ 下面 cleanup 会被调一次
+    //   b) 若不登记 ⇒ 只能由我们调
+    // 分不清是哪种，所以 cleanup 做成**幂等**：调用两次只是什么都不做。
+    // 宿主的 cordis 是打包过的，查不到 inject 的确切语义，不靠猜。
+    let cleanup = null
+    const stopped = { done: false }
+    const onServiceLost = ctx.inject(['timer'], (injected) => {
       const service = injected.get('timer')
       if (!service || typeof service.interval !== 'function') return
       const stops = [
         service.interval(() => void flushNow(), FLUSH_MS),
         service.interval(() => void runTick('interval'), Math.max(1, config.tickMinutes) * 60_000),
       ]
-      return () => {
+      cleanup = () => {
+        if (stopped.done) return
+        stopped.done = true
         for (const stop of stops) {
           try {
             stop()
@@ -547,8 +560,24 @@ export function apply(ctx, config) {
         releaseBackfillTimer()
         void flushNow()
       }
-    }),
-  )
+      return cleanup
+    })
+    return () => {
+      // 先释放 inject 注册；若它自己会调回调返回值，cleanup 已跑过（幂等保护）
+      try {
+        if (typeof onServiceLost === 'function') onServiceLost()
+        else if (onServiceLost && typeof onServiceLost.dispose === 'function') onServiceLost.dispose()
+      } catch {
+        /* 卸载路径不抛 */
+      }
+      // 兜底：万一宿主没登记回调的返回值
+      try {
+        cleanup?.()
+      } catch {
+        /* 同上 */
+      }
+    }
+  })
 
   /* ---------- 工具面 ---------- */
   ctx.effect(() =>
@@ -615,6 +644,7 @@ export function apply(ctx, config) {
           buffered: buffer.size(),
           eventsToday,
           lastError: lastError || '',
+          catchUpDropped: lastCatchUpDropped.slice(0, 10).join(','),
           services: probeServices(ctx),
         }
       },

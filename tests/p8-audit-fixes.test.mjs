@@ -200,7 +200,7 @@ test('补收口：更早的历史天不能被 lastClosedDay 挡掉', () => {
     closedDays: ['2026-11-09'],
     daysWithEvents: ['2026-11-05', '2026-11-06', '2026-11-07', '2026-11-08', '2026-11-09', '2026-11-10'],
   })
-  assert.deepEqual(days, ['2026-11-05', '2026-11-06', '2026-11-07', '2026-11-08'])
+  assert.deepEqual(days.days, ['2026-11-05', '2026-11-06', '2026-11-07', '2026-11-08'])
 })
 
 test('收口决定：已在 closedDays 里的日子不重复收', () => {
@@ -399,4 +399,19 @@ test('宿主激活：10 个工具都注册，且 output.schema 写实', async ()
     await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 })
     await rm(vaultDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 })
   }
+})
+
+test('补收口：被 lookback 截掉的日子要报出来，不能静默丢（P2-9）', () => {
+  const many = Array.from({ length: 15 }, (_, i) => `2026-10-${String(i + 1).padStart(2, '0')}`)
+  const result = catchUpDays({
+    now: new Date('2026-11-10T09:00:00').getTime(),
+    closeAt: '23:50',
+    lastClosedDay: '2026-10-15',
+    closedDays: [],
+    daysWithEvents: many,
+    lookback: 5,
+  })
+  assert.equal(result.days.length, 5, '只补最近 5 天')
+  assert.ok(result.dropped.length > 0, '被截掉的日子必须能看见，否则用户以为全补了')
+  assert.equal(result.days.length + result.dropped.length, 14, '合计等于全部待补天数')
 })
