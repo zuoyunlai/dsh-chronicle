@@ -641,3 +641,79 @@ test('根因核验：原文里有依据就通过，取不到原文才降级', as
   assert.match(entries2[0].basis, /无法取到原文/)
   assert.equal(entries2[0].rootCauseUnverified, true)
 })
+
+/* ---------- 证据窗必须真的接上（2026-11-11 回归） ---------- */
+
+test('证据窗：用原文能核到根因，用纲要头核不到（回归守卫）', async () => {
+  const { verifyRootCauses } = await import('../lib/llm.js')
+  const { buildTurnTextIndex, buildTurns } = await import('../lib/outline.js')
+
+  // 真实形状：用户说「手写知识挡掉手册」，助手正文里写明根因。
+  const rows = [
+    { v: 1, sid: 's1', seq: 100, ts: '2026-11-11T10:00:00+08:00', kind: 'user', text: '手册第 3 章读不到', ws: 'w' },
+    {
+      v: 1, sid: 's1', seq: 108, ts: '2026-11-11T10:00:05+08:00', kind: 'assistant',
+      // 根因写在正文**第 300 字之后** —— 纲要头取不到。
+      // 注意：不能用空白填充！condense 会先 replace(/\s+/g,' ') 把空白压掉，
+      // 那样根因句其实还在前 300 字里，测试前提就错了（踩过一次）。
+      text:
+        '我在逐条核对确认链路，先把每一步的输入输出都记下来，免得回头又要重跑一遍。'.repeat(12) +
+        '验证发现一个真问题：**手写知识命中时会把手册挡掉**。我原来让手写知识优先于手册，命中即返回。我改成两者叠加。',
+      ws: 'w',
+    },
+  ]
+  const turns = buildTurns(rows)
+  const textByRef = buildTurnTextIndex(rows)
+  const basis = '根因：手写知识命中时优先级高于手册正文，导致手册被挡。· 绕过：调整命中优先级。'
+
+  // 旧路径：纲要头 —— 核不到
+  const old = [{ ref: 's1#100', section: 'pitfalls', basis }]
+  verifyRootCauses(old, new Map(turns.map((t) => [t.ref, [t.userHead, t.assistantHead].filter(Boolean).join(' ')])))
+  assert.equal(old[0].rootCauseUnverified, true, '纲要头核不到（这正是 2026-11-11 的现象）')
+
+  // 新路径：原文 —— 核到
+  const fresh = [{ ref: 's1#100', section: 'pitfalls', basis }]
+  verifyRootCauses(fresh, textByRef)
+  assert.notEqual(fresh[0].rootCauseUnverified, true, '原文里写着根因，不该被判未核验')
+  assert.match(fresh[0].basis, /手写知识命中时优先级高于手册正文/)
+})
+
+test('enhance 链路必须把原文索引传下去（close.js → index.js）', async () => {
+  // 这条卡的是「改错地方」：上一版把 textByRef 加在 close.js，
+  // 而 close.js 里根本没有 scoreDayWithLlm 调用 → 替换静默失败 → 一直没生效。
+  const { readFile } = await import('node:fs/promises')
+  const closeSrc = await readFile(new URL('../lib/close.js', import.meta.url), 'utf8')
+  const indexSrc = await readFile(new URL('../index.js', import.meta.url), 'utf8')
+
+  assert.match(closeSrc, /enhance\(\{[\s\S]{0,200}?textByRef/, 'close.js 调 enhance 时必须带 textByRef')
+  assert.match(indexSrc, /async function enhance\(\{ turns, textByRef \}\)/, 'index.js 的 enhance 必须接收 textByRef')
+  assert.match(indexSrc, /scoreDayWithLlm\(\{[\s\S]{0,300}?textByRef/, 'index.js 调 scoreDayWithLlm 时必须带 textByRef')
+  // 也不许留「import 了却没人用」的死代码
+  const imported = /import \{[^}]*buildTurnTextIndex[^}]*\} from/.test(indexSrc) || /import \{[^}]*buildTurnTextIndex[^}]*\} from/.test(closeSrc)
+  assert.ok(imported, 'buildTurnTextIndex 应该有被 import')
+})
+
+/* ---------- 根因判据：从「二字组命中率」换成「连续公共子串」 ---------- */
+
+test('根因判据：连续公共子串 ≥6 字即算有依据（切分伪影不再带偏）', async () => {
+  const { hasRootCauseEvidence, longestCommonRun } = await import('../lib/llm.js')
+  // 真实原文（2026-11-11 实际数据）：两处都提到「手写知识命中」
+  const source = '验证发现一个真问题：**手写知识命中时会把手册挡掉**。我原来让手写知识优先于手册，命中即返回。'
+  assert.equal(hasRootCauseEvidence('手写知识命中时优先级高于手册正文，导致手册被挡', source), true)
+  assert.ok(longestCommonRun('手写知识命中时优先级高于手册正文', source) >= 6)
+  // 语序变化 + 只提过一次 → 覆盖率偏低，被保守判为未核验（有意为之）
+  const partial = '我原来让手写知识优先于手册，命中即返回。实测手册被挡掉。'
+  assert.equal(hasRootCauseEvidence('手写知识命中时优先级高于手册正文', partial), false)
+})
+
+test('根因判据：英文标识符命中是最强信号', async () => {
+  const { hasRootCauseEvidence } = await import('../lib/llm.js')
+  assert.equal(hasRootCauseEvidence('ctx.timer 没 inject 导致工具消失', '我们发现 ctx.timer 一直没注入。'), true)
+  assert.equal(hasRootCauseEvidence('某个凭空编的根因', '原文完全不相干的内容。'), false)
+})
+
+test('根因判据：与原文毫无重叠的猜测必须被拦下', async () => {
+  const { hasRootCauseEvidence } = await import('../lib/llm.js')
+  assert.equal(hasRootCauseEvidence('数据库连接池配置错误', '今天把按钮颜色改成了蓝色。'), false)
+  assert.equal(hasRootCauseEvidence('并发竞态导致写入丢失', '今天把按钮颜色改成了蓝色。'), false)
+})

@@ -110,7 +110,7 @@ window.__ModuleLoader__.load({
 
     const isZh = () => currentLocale === 'zh'
     const T2 = (key) => (currentLocale === 'zh' ? I18N.zh : I18N.en)[key] || key
-    const VERSION = '2.3.0'
+    const VERSION = '2.3.1'
     const KIND = 'chronicle'
 
     /**

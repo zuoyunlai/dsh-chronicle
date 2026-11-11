@@ -19,6 +19,7 @@ import { dayKey, settledDays, weekId } from './lib/time.js'
 import { EventBuffer, prepareRow } from './lib/ingest.js'
 import { closeDay, previewDay } from './lib/close.js'
 import { scoreDayWithLlm } from './lib/llm.js'
+import { buildTurnTextIndex } from './lib/outline.js'
 import { loadEntries, loadEdges, searchEntries, buildInjectLine } from './lib/recall.js'
 import { createChronicleApi, registerChronicleRoutes } from './lib/api.js'
 import { backfillDay } from './lib/backfill.js'
@@ -74,7 +75,7 @@ export const inject = ['tools']
 /** 当前实现阶段。 */
 export const PHASE = 'P6'
 
-const VERSION = '2.3.0'
+const VERSION = '2.3.1'
 
 /** 每攒多少条事件就落一次盘。 */
 const FLUSH_EVENTS = 20
@@ -452,7 +453,7 @@ export function apply(ctx, config) {
   let llmNote = ''
 
   function makeEnhancer(mode) {
-    return async function enhance({ turns }) {
+    return async function enhance({ turns, textByRef }) {
       if (String(mode || 'rule') !== 'llm') {
         llmError = ''
         return []
@@ -481,6 +482,12 @@ export function apply(ctx, config) {
 
         const entries = await scoreDayWithLlm({
           turns,
+          // **原文索引**：核验根因要用全文，不能用纲要的头 300 字。
+          // 2026-11-11 实测：纲要头的命中率 45%（低于 50% 阈值）⇒ 根因被误判「原文无据」；
+          // 原文 1038 字里「手写知识命中时会把手册挡掉」写得清清楚楚。
+          // 上一版 v2.2.2 改错了地方（close.js 里根本没有 scoreDayWithLlm 调用，
+          // 替换静默失败），所以一直没生效。
+          textByRef: textByRef || buildTurnTextIndex(rows),
           llm,
           provider: target.provider,
           model: target.model,
