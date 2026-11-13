@@ -432,8 +432,8 @@ LIST FROM "chronicle" WHERE contains(entities, "柜门原型") SORT id DESC
 | `tickMinutes` | number | `5` | 轮询间隔；只做"是否该收口"的判断，不重活 |
 | `weekFile` | boolean | `true` | 按周一个文件；`false` 退回按天 |
 | `includeSubagent` | boolean | `false` | 是否收录子代理会话 |
-| `followModel` | boolean | `true` | 打分用当前选中模型；`false` 用 `scoringModel` |
-| `scoringModel` | string | `""` | `provider/model`，仅当 `followModel:false` |
+| ~~`followModel`~~ | boolean | ~~`true`~~ | **v2.5.0 起已删除**：打分永远跟随宿主当前模型（见 CHANGELOG 2.5.0 C3） |
+| ~~`scoringModel`~~ | string | ~~`""`~~ | **v2.5.0 起已删除**：要换模型就在宿主里换当前模型 |
 | `importanceFloor` | number | `3` | 低于此分折叠进附录 |
 | `injectLine` | boolean | `true` | 是否注入那一行 |
 | `injectBudget` | number | `80` | 注入 token 硬上限 |
