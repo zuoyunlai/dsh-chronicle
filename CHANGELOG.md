@@ -1,5 +1,45 @@
 # CHANGELOG
 
+## 2.4.2 — 2026-11-13
+
+**重收 11-12 后 `evidenceStale` 从 21 涨到 26 —— 判据用错了宇宙。**
+
+### 现场
+
+v2.4.1 上重收 11-12（LLM 档）成功，但复查发现 `evidenceStale` 21 → **26**，
+而这 26 条的 27 个 evidence ref **全部能在 `events/` 里找到**（0 缺失）。
+
+### 根因
+
+`lib/close.js` 的 `liveRefs` 取的是**当期周文件的条目 ref**：
+
+```js
+const liveRefs = new Set()
+for (const d of days) for (const e of d.entries) if (e.ref) liveRefs.add(e.ref)
+```
+
+条目是**打过分的摘要**：模型漏归组、低分折叠进附录、`mergeProjects` 合并，
+都会让「仍然可回源的证据」不在 liveRefs 里 ⇒ 被标成悬空。
+重收时 LLM 只产出 32 条（规则档 60 条），条目变少 ⇒ 假标记变多。
+
+**「证据还在不在」的宇宙是事件流，不是当期摘要。**
+
+### 修
+
+新增 `collectAliveRefs(dataDir, days)`：条目 ref ∪ 最近 30 天 `events/*.jsonl` 的 `sid#seq`
+（每天约 4.6 ms/MB，读不出来的天跳过——宁可漏判悬空也不误标）。
+`markStaleEvidence` 改用它。补回归：条目里只有 `s1#1`、事件库里有 `s1#1/s1#2` ⇒ `s1#2` 必须算活着。
+
+### 数据修复（本机现网，92 条事实）
+
+用新判据重算：**26 → 0**（27 个 ref 全部命中）。已回写 `facts/index.json` 与 26 个事实页，
+vault 单独提交 `chronicle: 修正 26 条事实的 evidenceStale 假标记（判定改为按事件流）`。
+另把 09/10/11 三天的 `closedStamps` 回填成当前 mtime（依据：这三天的打分缓存 mtime 都是
+11-12 15:59–16:01，即它们是在当天结束之后才重算的，不存在 11-12 那种「收口时还没写完」的缺口；
+回填语义是「以此刻的状态为已收口基线」，之后若有追加仍会触发重收）。
+
+---
+
 ## 2.4.1 — 2026-11-13
 
 **重启后按报告 §5 验证时发现的新问题：收口「历史某一天」会把还没过完的今天写进周文件。**

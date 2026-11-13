@@ -119,3 +119,27 @@ test('P1-5 回归：失败次数从 tool/result 行统计，且不因它凭空�
   const lonely = buildTurns([{ sid: 's2', seq: 9, kind: 'toolresult', ok: false, ts: '2026-11-13T11:00:00+08:00' }])
   assert.equal(lonely.length, 0)
 })
+
+test('P1-2b 判定宇宙是事件流：条目里没有、但事件库里有的 ref 不算悬空（2026-11-13 复跑发现）', async () => {
+  const { mkdtemp, rm, mkdir, writeFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { collectAliveRefs } = await import('../lib/close.js')
+
+  const dir = await mkdtemp(join(tmpdir(), 'chronicle-alive-'))
+  try {
+    await mkdir(join(dir, 'events'), { recursive: true })
+    await writeFile(
+      join(dir, 'events', '2026-11-12.jsonl'),
+      '{"sid":"s1","seq":1,"kind":"user"}\n{"sid":"s1","seq":2,"kind":"assistant"}\n',
+    )
+    // 当期条目里只留了 s1#1（模型漏归组了 s1#2）
+    const days = [{ entries: [{ ref: 's1#1' }] }]
+    const alive = await collectAliveRefs(dir, days)
+    assert.ok(alive.has('s1#1'))
+    assert.ok(alive.has('s1#2'), '事件库里存在的 ref 必须算「还活着」')
+    assert.ok(!alive.has('s1#9'))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
