@@ -165,3 +165,21 @@ test('D3 默认预算 140（旧值 80 会把两段都切断）', () => {
   assert.ok(line.length <= 140)
   assert.ok(line.length > 40, '默认预算不该退回到 80 那么紧')
 })
+
+test('D3 detector 片段也按标点断句（真实数据实测：原来会切在「HTTP」中间）', () => {
+  const facts = [
+    {
+      id: 'p1',
+      kind: 'pitfall',
+      scope: 'general',
+      project: 'p',
+      status: 'single',
+      bornOn: '2026-11-13',
+      title: '安全头 HEAD 假阴性',
+      detector: '看到某接口探测结果为 0/失败时，先确认探测用的 HTTP 方法是不是 HEAD',
+    },
+  ]
+  const line = buildInjectLine({ facts, budgetChars: 140 })
+  assert.ok(!/HTTP…/.test(line), '不能切在 HTTP 中间：' + line)
+  assert.match(line, /失败时…」/, '应在标点处断：' + line)
+})
