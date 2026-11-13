@@ -15,7 +15,7 @@
 
 产物是一个独立的 Obsidian vault，**零第三方依赖**——`dependencies` 为空，只声明宿主自带的 `@deepseek-ai/*`。
 
-> **状态：v2.3.1**（P6）
+> **状态：v2.4.0**（P6）
 > 采集 → 回捞 → 纲要 → 规则/LLM 打分 → **日结 + 七块** → 周文件 → 按天时间轴 → 实体图与实体页 → 事实库 → 跨天线索 → 规则导出 → 右侧栏面板。
 > 176 条测试全绿。
 
@@ -121,13 +121,15 @@ dsh plugin --profile <你的 profile> add dsh-chronicle
 | `sessions:read` | 后台回捞读历史会话（只读，不改写任何会话） |
 | `system-prompt:write` | 往系统提示里追加**一行**摘要（见下方披露） |
 | `fs:read` | 读自己的数据目录 |
-| `network:egress` | 面板客户端 `fetch` 同源的 `/chronicle/api/*` |
+| `network:egress` | 面板客户端 `fetch` 同源的 `/chronicle/api/*`（同源、只读、仅回环） |
 
 `dsh.labels` 标了 `prompt-modification`——因为确实会动系统提示。
 
 ### 它不做的事（`dsh.commitments` 里逐条声明）
 
-- **不上传会话**：所有内容只写本机 `events/*.jsonl`
+- **不上传会话**：事件只写本机 `events/*.jsonl`。唯一例外是 `scoring: llm`（默认关）——
+  它把当天**纲要**（每轮用户 ≤160 字 / 助手 ≤100 字）交给宿主 `llm` 服务做一次打分，
+  provider 跟随你当前选择的模型，插件不写死任何地址；详见 `dsh.disclosure.llmEgress`
 - **不经过第三方中转**：没有第三方端点（`disclosure.endpoints` 为空数组）
 - **不读凭据**：从不碰 `ctx.credentials`
 - **不静默改改写提示**：只追加一个登记过的 context 块，见下方披露
@@ -142,18 +144,19 @@ dsh plugin --profile <你的 profile> add dsh-chronicle
 [chronicle] 今天 12 条 · 一条约定与一个待避的坑
 ```
 
-内容 = 当天条目数 + 一条与你当正在做的事相关的「约定」 + 一个「该避的坑」。
+优先取「与最近在做的事同项目」的一条约定/决策 + 一个该避的坑；没有可用事实时退回当天条目数。
 当天没有记录时**整行不出现**。关掉：配置里 `injectLine: false`。
 
 ### 数据保留（`dsh.disclosure.retention`）
 
-全部留在本机，插件不自动上传、**也不自动删除**。清理要你自己动手。
+全部留在本机，插件不自动上传。`keepDays=0`（默认）时**也不自动删除**，清理要你自己动手；
+把它设成正整数才会按天清理 `events/`（`facts/` 与产物永不自动删）。
 
 ---
 
 ## 配置
 
-18 项，在「设置 → 插件 → 起居注」里改。常用的：
+21 项，在「设置 → 插件 → 起居注」里改。常用的：
 
 | 键 | 默认 | 说明 |
 |---|---|---|
@@ -166,13 +169,16 @@ dsh plugin --profile <你的 profile> add dsh-chronicle
 | `scoringModel` | 空 | 固定打分模型，形如 `provider/model`；仅 `followModel=false` 时生效 |
 | `gitCommit` | `true` | 收口后对 vault 做本地 commit（**只 commit 不 push**） |
 | `injectLine` | `true` | 是否注入那一行摘要 |
-| `injectBudget` | `80` | 注入行的字符上限 |
+| `injectBudget` | `80` | 注入行的**字符**上限（含 `[chronicle]` 前缀） |
+| `llmTimeout` | `120` | LLM 打分超时（秒）；超时退回规则分，不会卡住收口 |
 | `redact` | `true` | 落盘前脱敏凭据 |
 | `maxEventsPerDay` | `5000` | 单日事件上限，超出会计数并报出 |
 | `entityRule` | `on-hit` | 实体页门槛：`on-hit` / `score` / `always` |
 | `uiLocale` | `auto` | 面板语言：`auto` / `zh` / `en` |
 | `weekFile` | `true` | 按周一个文件；关掉退回按天（一年 365 个文件会拖垮 Obsidian） |
 | `includeSubagent` | `false` | 是否收录子代理会话 |
+| `panelGuard` | `loopback` | 面板路由只接受回环 peer + 回环 Host 的 GET；`off` 仅在局域网访问且知情时用 |
+| `keepDays` | `0` | `>0` 时自动清理这么久之前的 `events/*.jsonl`（0 = 永不清理） |
 
 完整清单见 `chronicle_ping` 输出或设置页。
 

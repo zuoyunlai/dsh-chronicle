@@ -15,14 +15,14 @@ import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-import { dayKey, settledDays, weekId } from './lib/time.js'
+import { dayKey, settledDays, weekId, applyCloseLedger } from './lib/time.js'
 import { EventBuffer, prepareRow } from './lib/ingest.js'
 import { closeDay, previewDay } from './lib/close.js'
 import { scoreDayWithLlm } from './lib/llm.js'
 import { buildTurnTextIndex } from './lib/outline.js'
 import { loadEntries, loadEdges, searchEntries, buildInjectLine } from './lib/recall.js'
 import { createChronicleApi, registerChronicleRoutes } from './lib/api.js'
-import { backfillDay } from './lib/backfill.js'
+import { backfillDay, withTimeout } from './lib/backfill.js'
 import { readFacts, bumpFactHits } from './lib/facts.js'
 import { bumpEntityHits } from './lib/entitypages.js'
 import { reviewCandidates, renderRulesMarkdown } from './lib/rules.js'
@@ -40,6 +40,7 @@ import {
   writeAtomic,
   readMaybe,
   eventDayStamps,
+  pruneEventDays,
 } from './lib/store.js'
 import { createSerializer } from './lib/serialize.js'
 import { TOOL_SCHEMAS } from './lib/schemas.js'
@@ -75,7 +76,7 @@ export const inject = ['tools']
 /** 当前实现阶段。 */
 export const PHASE = 'P6'
 
-const VERSION = '2.3.1'
+const VERSION = '2.4.0'
 
 /** 每攒多少条事件就落一次盘。 */
 const FLUSH_EVENTS = 20
@@ -122,7 +123,7 @@ export const Config = Schema
         .min(0)
         .max(400)
         .default(80)
-        .description('注入 token 硬上限。'),
+        .description('注入行字符上限（含 [chronicle] 前缀；默认 80 字符）。'),
       redact: Schema.boolean()
         .default(true)
         .description('写入磁盘前脱敏（密钥 / 令牌 / 私钥块 / 手机号 / 身份证 / 邮箱）。强烈建议不要关。'),
@@ -143,6 +144,11 @@ export const Config = Schema
       scoring: Schema.string()
         .default('rule')
         .description('打分档位：rule = 纯规则（零成本、永远可用）；llm = 让当前模型整理一天（更准，花一次调用，失败自动退回 rule）。'),
+      llmTimeout: Schema.number()
+        .min(10)
+        .max(600)
+        .default(120)
+        .description('LLM 打分超时（秒）。超时即退回规则分；没有它时 provider 挂起会让收口永久卡住。'),
       entityMinScore: Schema.number()
         .min(1)
         .max(5)
@@ -154,6 +160,12 @@ export const Config = Schema
       panel: Schema.boolean()
         .default(true)
         .description('是否注册 Web 面板入口（P4 生效）。'),
+      panelGuard: Schema.string()
+        .default('loopback')
+        .description(
+          '面板路由的入口守卫（2026-11-13 审计 P1-1）。loopback = 只接受回环 peer 与回环 Host 的 GET/HEAD；' +
+            'off = 关掉守卫（仅当你在局域网里直接访问面板、且清楚私有日志会暴露给该网段时才设）。',
+        ),
       keepDays: Schema.number()
         .min(0)
         .max(3650)
@@ -223,6 +235,7 @@ export function apply(ctx, config) {
   /** @type {any} */
   let state = null
   let closing = false
+  let disposed = false
   let lastError = ''
   // 被 lookback 截掉的待补收口日（P2-9：不能静默丢）
   let lastCatchUpDropped = []
@@ -243,6 +256,9 @@ export function apply(ctx, config) {
   const flushNow = () => serializeFlush(() => doFlush())
 
   async function doFlush() {
+    // 卸载之后一律不再写盘：启动序列、回捞续补与定时器都可能比卸载活得久
+    // （2026-11-13 审计 P1-8：disposed 原来只挡启动序列）
+    if (disposed) return 0
     const written = await buffer.flush({
       appendEvents,
       // 跨进程去重：第一次写某天之前先把磁盘上已有的 sid#seq 读进来，
@@ -252,11 +268,21 @@ export function apply(ctx, config) {
         return read.rows.map((row) => `${row.sid}#${row.seq}`)
       },
     })
-    if (written > 0) {
+    // 有写入、或有丢弃时要落 state：只丢不写的那一 tick 也要把「丢了多少」记下来，
+    // 否则超限完全不可见（2026-11-13 审计 P2：原来是累计值冒充今日值）
+    if (written > 0 || buffer.dropped > 0) {
       const s = await getState()
       s.lastTickAt = Date.now()
-      s.dropped = (s.dropped || 0) + buffer.dropped
-      buffer.dropped = 0
+      if (buffer.dropped > 0) {
+        s.dropped = (s.dropped || 0) + buffer.dropped
+        // 按天记账：体检要报「今天丢了多少」，累计值做不到这件事
+        s.droppedByDay = { ...(s.droppedByDay || {}) }
+        for (const [day, count] of buffer.droppedByDay) {
+          s.droppedByDay[day] = (s.droppedByDay[day] || 0) + count
+        }
+        buffer.dropped = 0
+        buffer.droppedByDay.clear()
+      }
       await writeState(dataDir, s)
     }
     return written
@@ -271,6 +297,7 @@ export function apply(ctx, config) {
    * 这个函数是「跨工作区」能成立的前提 —— 实时事件只覆盖进程内有活动的会话。
    */
   async function backfillTarget(day, { force = false, skipLive = true, startIndex = 0, deadlineMs } = {}) {
+    if (disposed) return lastBackfill
     const startedAt = Date.now()
     // 先置「进行中」：回捞是后台分批跑的，ping 必须能看出它在干什么
     lastBackfill = { day, running: true, sessions: 0, rows: 0, startedAt, nextIndex: startIndex }
@@ -362,6 +389,7 @@ export function apply(ctx, config) {
   }
 
   async function runTick(reason) {
+    if (disposed) return
     if (closing) return
     try {
       await flushNow()
@@ -394,15 +422,15 @@ export function apply(ctx, config) {
           void backfillLoop(day)
           const result = await closeDay(closeArgs(day))
           if (result.closed) {
-            if (!s.lastClosedDay || day > s.lastClosedDay) s.lastClosedDay = day
-            s.lastClose = { day, week: result.week, at: now, reason }
-            // 记下收口那一刻的事件文件 mtime：之后回捞又补进事件 ⇒ 需要重收
-            if (stamps[day]) s.closedStamps = { ...(s.closedStamps || {}), [day]: stamps[day] }
-            // 只留最近 90 天的戳，别让 state 无限长
-            const keepFrom = dayKey(now - 90 * 86400000)
-            for (const key of Object.keys(s.closedStamps || {})) {
-              if (key < keepFrom) delete s.closedStamps[key]
-            }
+            // 台账只有一处写（lib/time.js applyCloseLedger）：closedDays 与 closedStamps 必须同写，
+            // 缺 closedDays ⇒ 下一 tick 重收同一天；缺 closedStamps ⇒ 之后补进的事件永不重收。
+            applyCloseLedger(s, {
+              day,
+              week: result.week,
+              at: now,
+              reason,
+              stamp: stamps[day] || 0,
+            })
             await writeState(dataDir, s)
           }
         }
@@ -480,22 +508,28 @@ export function apply(ctx, config) {
           reasoningEffort = undefined
         }
 
-        const entries = await scoreDayWithLlm({
-          turns,
-          // **原文索引**：核验根因要用全文，不能用纲要的头 300 字。
-          // 2026-11-11 实测：纲要头的命中率 45%（低于 50% 阈值）⇒ 根因被误判「原文无据」；
-          // 原文 1038 字里「手写知识命中时会把手册挡掉」写得清清楚楚。
-          // 上一版 v2.2.2 改错了地方（close.js 里根本没有 scoreDayWithLlm 调用，
-          // 替换静默失败），所以一直没生效。
-          textByRef: textByRef || buildTurnTextIndex(rows),
-          llm,
-          provider: target.provider,
-          model: target.model,
-          // 预算按轮数给：8000 是写死的，42 轮时不够（实测输出被 maxTokens 截断，
-          // 整天的内容全丢退回规则分）。每轮约需 150–250 token 输出 + 思考开销。
-          maxTokens: Math.min(32000, 8000 + turns.length * 350),
-          reasoningEffort,
-        })
+        const entries = await withTimeout(
+          scoreDayWithLlm({
+            turns,
+            // **原文索引**：核验根因要用全文，不能用纲要的头 300 字。
+            // 2026-11-11 实测：纲要头的命中率 45%（低于 50% 阈值）⇒ 根因被误判「原文无据」；
+            // 原文 1038 字里「手写知识命中时会把手册挡掉」写得清清楚楚。
+            // 上一版 v2.2.2 改错了地方（close.js 里根本没有 scoreDayWithLlm 调用，
+            // 替换静默失败），所以一直没生效。
+            textByRef: textByRef || buildTurnTextIndex(rows),
+            llm,
+            provider: target.provider,
+            model: target.model,
+            // 预算按轮数给：8000 是写死的，42 轮时不够（实测输出被 maxTokens 截断，
+            // 整天的内容全丢退回规则分）。每轮约需 150–250 token 输出 + 思考开销。
+            maxTokens: Math.min(32000, 8000 + turns.length * 350),
+            reasoningEffort,
+          }),
+          // 打分必须有时限：原来直接 await，provider 挂起时 closing=true 会永久卡住收口，
+          // 之后所有天的收口都进不来（2026-11-13 审计 P1-7）。
+          Math.max(10, Number(config.llmTimeout) || 120) * 1000,
+          'llm 打分',
+        )
         llmError = ''
         llmNote = entries.note || ''
         return entries
@@ -538,6 +572,7 @@ export function apply(ctx, config) {
         }
         const prepared = prepareRow(session, event, config.redact)
         if (!prepared) return
+        if (disposed) return
         buffer.push(prepared.day, prepared.row)
         if (buffer.size() >= FLUSH_EVENTS) void flushNow()
       } catch (error) {
@@ -637,6 +672,7 @@ export function apply(ctx, config) {
                 (value.llmError ? `⚠️ LLM 上次失败：${value.llmError}\n` : '') +
                 (Array.isArray(value.revisited) && value.revisited.length > 0 ? `重收 ${value.revisited.join('、')}（收口后回捞补进了新事件）\n` : '') +
                 `状态 上次收口 ${value.lastClosedDay || '（还没收过）'} · 缓冲 ${value.buffered} 条 · 今日 ${value.eventsToday} 条\n` +
+                (Number(value.keepDays) > 0 ? `保留 events ${value.keepDays} 天（已清 ${value.pruned || 0} 天）\n` : '') +
                 `服务 ${marks}`,
             },
           ]
@@ -670,6 +706,8 @@ export function apply(ctx, config) {
           })(),
           gitCommit: Boolean(config.gitCommit),
           weekFile: Boolean(config.weekFile),
+          keepDays: Number(config.keepDays) || 0,
+          pruned: Array.isArray(s.prunedDays) ? s.prunedDays.length : 0,
           lastClosedDay: s.lastClosedDay || '',
           buffered: buffer.size(),
           eventsToday,
@@ -750,9 +788,19 @@ export function apply(ctx, config) {
         await backfillLoop(day, { force: true, skipLive: false })
         const result = await closeDay(closeArgs(day, mode))
         if (result.closed) {
-          if (!s.lastClosedDay || day > s.lastClosedDay) s.lastClosedDay = day
-          // 收口日集合：补收口只看它，不再只看 lastClosedDay（否则更早的历史天被永久跳过）
-          s.closedDays = [...new Set([...(s.closedDays || []), day])].sort().slice(-60)
+          // 先把缓冲写出去，再量事件文件 mtime —— 否则记下的戳不包含刚缓冲的行，
+          // 下次 tick 会把这一天当「事件又变了」反复重收。
+          await flushNow()
+          const stamps = await eventDayStamps(dataDir)
+          // 与定时器路径共用同一处台账（审计 P0-2：手动路径漏写 closedStamps，
+          // 导致这一天之后新增的事件永久进不了产物）
+          applyCloseLedger(s, {
+            day,
+            week: result.week,
+            at: Date.now(),
+            reason: 'manual',
+            stamp: stamps[day] || 0,
+          })
           await writeState(dataDir, s)
           await refreshCorpus()
         }
@@ -803,7 +851,11 @@ export function apply(ctx, config) {
         ? buildInjectLine({
             entries,
             facts: await readFacts(dataDir),
-            budgetChars: Math.max(20, config.injectBudget) * 2,
+            // 预算单位统一为**字符**（2026-11-13 审计 P1-6：原来乘 2 变成 160，
+            // 而 disclosure 写的是 80；Schema 又写成 token —— 三套口径）
+            budgetChars: Math.max(20, config.injectBudget),
+            // 让注入行与「最近在做的事」相关：取语料里最新条目的项目
+            focusProject: entries.length > 0 ? String(entries[entries.length - 1].project || '') : '',
           })
         : ''
     } catch {
@@ -852,7 +904,9 @@ export function apply(ctx, config) {
   // 正确做法：`ctx.inject(['webServer'], cb)` —— 服务已在就立即回调，否则等服务出现再回调。
   const routeReport = { ok: false, reason: 'not-run', attempts: [], disposers: 0 }
   const api = createChronicleApi({
-    loadCorpus: () => getCorpus(0),
+    // 走 60 秒 TTL：原来传 0 让 TTL 恒失效 ⇒ 每个面板请求都全量重读语料
+    // （2026-11-13 审计 P2；面板一次开图会连发 3 个请求）
+    loadCorpus: () => getCorpus(),
     neighborsOf: (name) => neighborsOf(dataDir, name),
     // 面板的「事实 / 线索 / 图谱」三个视图直读对应索引
     readFacts: () => readFacts(dataDir),
@@ -879,7 +933,9 @@ export function apply(ctx, config) {
       routeReport.ok = false
       return () => {}
     }
-    const { disposers } = registerChronicleRoutes(webServer, api, routeReport)
+    const { disposers } = registerChronicleRoutes(webServer, api, routeReport, {
+      guardMode: String(config.panelGuard || 'loopback') === 'off' ? 'off' : 'loopback',
+    })
     if (routeReport.ok) routeReport.reason = 'registered'
     return () => {
       for (const dispose of disposers) {
@@ -910,21 +966,42 @@ export function apply(ctx, config) {
 
   // 第三道保险：万一这个宿主版本没有 ctx.inject，或者 inject 没触发，
   // 三次延迟重试把注册补上。失败也只会停在 reason 里，不会影响其它功能。
+  //
+  // 2026-11-13 审计 P1-8：这个定时器与它补注册出来的路由原来都在 effect 之外 ——
+  // 卸载后重试照跑、路由照注册，等于插件"卸载了还在挂路由"。
+  // 现在定时器与补注册的 disposer 都收进同一个 effect。
   let routeRetries = 0
+  let retryTimer = null
+  const routeCleanups = []
+  ctx.effect(() => () => {
+    if (retryTimer) {
+      clearTimeout(retryTimer)
+      retryTimer = null
+    }
+    for (const cleanup of routeCleanups.splice(0)) {
+      try {
+        if (typeof cleanup === 'function') cleanup()
+      } catch {
+        /* 卸载路径不抛 */
+      }
+    }
+  })
   function retryRoutes() {
+    if (disposed) return
     if (routeReport.ok || routeRetries >= 3) return
     routeRetries += 1
     const webServer = optionalService(ctx, 'webServer')
     if (webServer && typeof webServer.register === 'function') {
       try {
-        ctx.effect(() => startRoutes(webServer))
+        const cleanup = startRoutes(webServer)
+        if (typeof cleanup === 'function') routeCleanups.push(cleanup)
       } catch {
         /* ignore */
       }
       return
     }
-    const handle = setTimeout(retryRoutes, 1000 * routeRetries * 3)
-    if (handle && typeof handle.unref === 'function') handle.unref()
+    retryTimer = setTimeout(retryRoutes, 1000 * routeRetries * 3)
+    if (retryTimer && typeof retryTimer.unref === 'function') retryTimer.unref()
   }
   retryRoutes()
 
@@ -1070,7 +1147,7 @@ export function apply(ctx, config) {
       name: 'chronicle_facts',
       description:
         '起居注事实库：列出不随日期过期的结论。可按 kind（decision/convention/pitfall/rejected/question）与项目过滤，' +
-        '返回 title/status/hits 与事实 id。想读全文用 chronicle_read_fact 或直接看 vault/facts/<id>.md。',
+        '返回 title/status/hits 与事实 id。想读全文直接看 vault/facts/<id>.md（面板「事实」页也能展开）。',
       parameters: {
         type: 'object',
         properties: {
@@ -1182,7 +1259,10 @@ export function apply(ctx, config) {
         })
         let path = ''
         // write 默认开：闭环的产物必须真的落盘，否则「规则导出」只是屏幕上的字
-        if (args?.write !== false) {
+        // write 默认关（opt-in）：工具描述写的就是「write=true 时落盘」，
+        // 默认值必须与描述一致；否则一次纯查询会顺手改写 AGENTS.generated.md
+        // 并被下次收口的 `git add -A` 一起提交（2026-11-13 审计 P2）。
+        if (args?.write === true) {
           path = join(vaultDir, 'AGENTS.generated.md')
           await writeAtomic(path, markdown)
         }
@@ -1225,7 +1305,6 @@ export function apply(ctx, config) {
   // 卸载标志：启动序列是异步的，apply() 返回后它还在写盘。
   // 没有这个标志的话，用户在启动过程中禁用插件 → 它仍会往 vault 写文件
   // （2026-11-10 实测：测试里 rm 临时目录撞 ENOTEMPTY）。
-  let disposed = false
   ctx.effect(() => () => {
     disposed = true
   })
@@ -1233,6 +1312,20 @@ export function apply(ctx, config) {
   void (async () => {
     try {
       await ensureVault(vaultDir)
+      if (disposed) return
+      // keepDays：清理过期事件文件（0 = 永不清理，默认）。启动时做一次即可，
+      // 误差不超过一天；清掉的每天会记进 state.prunedDays 供 ping 报出。
+      try {
+        const removed = await pruneEventDays(dataDir, Number(config.keepDays) || 0)
+        if (removed.length > 0) {
+          const s = await getState()
+          s.prunedDays = [...new Set([...(s.prunedDays || []), ...removed])].sort().slice(-30)
+          s.lastPruneAt = Date.now()
+          await writeState(dataDir, s)
+        }
+      } catch (error) {
+        lastError = String(error?.message || error).slice(0, 300)
+      }
       if (disposed) return
       await flushNow()
       if (disposed) return

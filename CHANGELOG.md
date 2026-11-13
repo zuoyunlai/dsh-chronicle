@@ -1,5 +1,73 @@
 # CHANGELOG
 
+## 2.4.0 — 2026-11-13
+
+**按 2026-11-13 全量审计（`docs/AUDIT-2026-11-13.md`）修订 22 项。两条 P0 都是「收口台账只写了一半」。**
+
+### 现场（两条 P0）
+
+`state.json` 里有 `closedDays: [09,10,11,12]`，**没有 `closedStamps`、也没有 `lastClose`** ——
+也就是说自动收口路径一次都没跑过（4 天全靠手动 `chronicle_close`），而两条路径各写一半台账：
+
+- 定时器路径（`index.js:396-407`）只写 `lastClosedDay/lastClose/closedStamps`，**不写 `closedDays`**
+  ⇒ `settledDays` 认为这天没完成 ⇒ 跨过午夜后**每 5 分钟重收同一天**（`tickMinutes` 默认 5）；
+- 手动路径（`index.js:752-756`）只写 `closedDays`，**不写 `closedStamps`**
+  ⇒ 「收口后回捞补进新事件要重收」的判据要求 `closedAt > 0`，永远不成立
+  ⇒ 11-12 收口于 15:51、事件写到 23:59，**2,306 条（60.6%，含 291 条 assistant / 38 条 user）没进任何产物**。
+
+**修**：`lib/time.js` 新增 `applyCloseLedger()` 作为唯一台账入口，`closedDays` 与 `closedStamps` 同写；
+手动收口先 `flushNow()` 再量 mtime。新增 `tests/p11-close-ledger.test.mjs`（7 条）锁住两个方向：
+连跑两次 tick 只收一次、收口后事件变新必须重收、拿不到 mtime 时保守不重收。
+
+### 数据面
+
+- **单日上限的「播种」是死代码**（`ingest.js:224-226` 先把 counts 写进去，`:264` 的播种恒假）⇒
+  上限实际是「每进程 5000 条」，重启归零。改为在 `flush` 按磁盘已有行数判余量，写成功才记 `dropped`。
+- **`evidenceStale` 只进不出**：只在 `stale>0` 时回写、且只写 index 不写页 ⇒ 实测 21/75 条误标
+  （22 个 ref 全部可查）。改为无条件回写（含 0）并同步事实页。
+- **`note` 类 14 条不进 `MEMORY.md`**（头部写 67 条、正文只列 53 条）。增「其他记录」分组。
+- **工具失败信号断链**：`ok` 只写在 `toolresult`，而判据要求 `tool.ok===false` ⇒ failures 恒 0。改判据。
+
+### 安全面
+
+- **面板 9 条路由绕过宿主鉴权**：实测宿主 `/api`→401，而 `/chronicle/api/facts`→200/16.7 KB，
+  POST 与伪造 `Host` 均受理（DNS rebinding 可远程读）。新增 `guardPanelRequest`：仅回环 peer +
+  回环 Host + GET/HEAD；配置 `panelGuard` 默认 `loopback`，`off` 是显式逃生门。
+- **`export_rules` 描述 opt-in、实际默认写盘** ⇒ 改为 `write === true` 才写。
+- **卸载后仍可写盘**：`retryRoutes` 定时器与其补注册的路由收进 `ctx.effect`；
+  `disposed` 下沉到 `doFlush / runTick / backfillTarget / 事件入口`。
+
+### 口径与自检
+
+- 注入预算三套口径（代码 ×2=160／disclosure 80／Schema「token」）⇒ 统一为字符，`injectBudget` 即真实上限；
+  并按「最近在做的事同项目」优先取事实（原来取数组第一个，与当前任务无关）。
+- **LLM 档无超时**：provider 挂起会让 `closing=true` 永久卡住收口。加 `withTimeout`（`llmTimeout` 默认 120 s）；
+  `disclosure` 增 `llmEgress`，写明出境内容、规模与「跟随宿主模型」。
+- **`keepDays` 是死键** ⇒ 落地 `pruneEventDays()`（默认 0 仍不清理），启动时执行并记入 `state.prunedDays`。
+- **丢弃计数把累计当今日** ⇒ 按天记账（`state.droppedByDay`），面板与体检分「今天/累计」；
+  体检新增三项：已收口缺时间戳、待收口/重收天、`evidenceStale` 自相矛盾（假标记的典型形态）。
+
+### 产物与性能
+
+- 事实页**全量重写**（76 页 ≈108 ms，1000 条 ≈1.4 s）⇒ 改增量：逐页比对，只写变化页；
+  `MEMORY.md` 去掉生成时间戳并做比对后再写 ⇒ 同样内容不再制造 diff / 提交。
+- 检索 IDF 用 WeakMap 按语料数组缓存；面板 `getCorpus(0)` 改回 60 s TTL（原来每请求全量刷语料）。
+- 脱敏补 3 类：`sk_live_…`、`Authorization: Basic …`、`scheme://user:pw@host`
+  （userinfo 排在 email 之前，避免口令段被当邮箱归错类）。
+- 幽灵工具引用 `chronicle_read_fact`（并不存在）改为直接指向 `vault/facts/<id>.md`；
+  低分条目不再同时出现在四块与「低分流水」。
+
+### 测试
+
+176 → **208 条全绿**（新增 32 条：收口台账 7 / 数据面 5 / 守卫 9 / 口径与自检 6 / 产物 5）。
+
+### 已知未做
+
+- `toolresult` 现在只用于失败计数，其余字段仍无人消费（占 43.6% 行数 / 27% 字节）。要不要砍掉是产品决策。
+- 检索仍是 O(n) 全量打分（IDF 已缓存）。1 年 ≈280 ms/次，够用；倒排索引留到真痛再说。
+
+---
+
 ## 2.3.1 — 2026-11-11
 
 **修根因核验一直没生效 —— v2.2.2 改错了地方。**

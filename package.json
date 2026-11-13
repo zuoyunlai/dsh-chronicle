@@ -1,6 +1,6 @@
 {
   "name": "dsh-chronicle",
-  "version": "2.3.1",
+  "version": "2.4.0",
   "description": "起居注：把 DeepSeek Harness 里的对话收口成可审、可检索、可关联的 Markdown 编年史 + 事实库。零第三方依赖，产物是 Obsidian 可直接打开的独立 vault。",
   "type": "module",
   "main": "index.js",
@@ -92,8 +92,9 @@
     },
     "disclosure": {
       "endpoints": [],
-      "retention": "全部留在本机。事件在 ~/.dsh/dsh-chronicle，产物在 vault 目录（默认 ~/dsh-chronicle-vault）。插件不自动上传、不自动删除；清理由用户自己动手。",
-      "systemPrompt": "常驻注入一行，≤ injectBudget 字符（默认 80）。内容：当天条目数 + 一条与你正在做的事相关的「约定」 + 一个「该避的坑」。没有记录时整行不出现。"
+      "llmEgress": "仅当 scoring=llm（默认 rule，关闭）：把当天**纲要**（每轮用户 ≤160 字 / 助手 ≤100 字 + 工作区 + 工具名 + 文件名，约 12 KB/天）交给宿主 llm 服务做一次打分调用，provider/model 跟随当前选择，插件不写死任何第三方地址；超时 120 秒后退回规则分。",
+      "retention": "全部留在本机。事件在 ~/.dsh/dsh-chronicle，产物在 vault 目录（默认 ~/dsh-chronicle-vault）。插件不自动上传、不自动删除；清理由用户自己动手（events 可选按 keepDays 自动清理）。",
+      "systemPrompt": "常驻注入一行，≤ injectBudget 字符（默认 80）。内容：优先一条与最近工作同项目的「约定」/决策 + 一个「该避的坑」；没有可用事实时退回当天条目数。没有记录时整行不出现。"
     }
   },
   "keywords": [
