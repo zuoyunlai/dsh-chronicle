@@ -473,3 +473,46 @@ test('界面语言：宿主 active=en 时面板显示英文', async () => {
   const text = JSON.stringify(log.elements)
   assert.ok(text.includes('Recent'), '宿主 active=en 时面板应显示英文 Recent：' + text.slice(0, 300))
 })
+
+test('检索视图保留相关性顺序并显示分数（面板补审 P0-2：不再被时间轴重排）', async () => {
+  const { mod, log, React } = await loadClient()
+  const ctx = makeCtx(log)
+  mod.apply(ctx)
+  const Body = bodyOf(log)
+
+  // 同一天的两条：高分的排在前面。若仍走 renderTimeline，会按板块序被重排。
+  const entries = [
+    { ref: 'b#1', day: '2026-11-10', section: 'pitfalls', title: '高分那条', claim: 'x', score: 0.93, importance: 2 },
+    { ref: 'a#1', day: '2026-11-10', section: 'projects', title: '低分那条', claim: 'y', score: 0.41, importance: 5 },
+  ]
+  React.__resetSlots()
+  React.__seedSlot(0, 'search')
+  React.__seedSlot(2, { loading: false, error: '', entries, summary: null, view: 'search', dayList: [] })
+  renderToLog(Body(), React, log)
+
+  const text = JSON.stringify(log.elements)
+  const hi = text.indexOf('高分那条')
+  const lo = text.indexOf('低分那条')
+  assert.ok(hi >= 0 && lo >= 0, '两条结果都要渲染')
+  assert.ok(hi < lo, '高分的必须排前面（不能按板块/日期重排）')
+  assert.ok(text.includes('0.93'), '要显示相关性分数')
+})
+
+test('「近期」顶部有可复制的近 7 天摘要（C2 冻结纪传体后的首屏补偿）', async () => {
+  const { mod, log, React } = await loadClient()
+  const ctx = makeCtx(log)
+  mod.apply(ctx)
+  const Body = bodyOf(log)
+
+  const dayList = [
+    { day: '2026-11-10', summary: '修面板时间轴。', count: 1, entries: [{ ref: 'a#1', title: '改面板', importance: 4 }] },
+  ]
+  React.__resetSlots()
+  React.__seedSlot(2, { loading: false, error: '', entries: dayList[0].entries, summary: null, view: 'recent', dayList })
+  renderToLog(Body(), React, log)
+
+  const text = JSON.stringify(log.elements)
+  assert.ok(text.includes('近 7 天摘要'), '缺少周摘要块')
+  assert.ok(text.includes('复制'), '缺少复制按钮')
+  assert.ok(text.includes('近 1 天'), '摘要正文要带上天数与条数')
+})

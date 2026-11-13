@@ -16,7 +16,7 @@ window.__ModuleLoader__.load({
     'use strict'
     const React = require('react')
     const h = React.createElement
-    const { useState, useEffect, useCallback, useRef } = React
+    const { useState, useEffect, useCallback, useRef, useMemo } = React
 
     const TAG = '[dsh-chronicle]'
 
@@ -110,7 +110,7 @@ window.__ModuleLoader__.load({
 
     const isZh = () => currentLocale === 'zh'
     const T2 = (key) => (currentLocale === 'zh' ? I18N.zh : I18N.en)[key] || key
-    const VERSION = '2.5.0'
+    const VERSION = '2.5.1'
     const KIND = 'chronicle'
 
     /**
@@ -170,16 +170,30 @@ window.__ModuleLoader__.load({
       warn: 'var(--dsw-alias-state-warn-primary, #e8a33d)',
     }
 
-    async function call(path, params) {
+    async function call(path, params, options) {
+      const timeoutMs = (options && options.timeoutMs) || 8000
       const qs = params ? '?' + new URLSearchParams(params).toString() : ''
-      const response = await fetch('/chronicle/api/' + path + qs, { headers: { accept: 'application/json' } })
-      const text = await response.text()
-      if (!response.ok) throw new Error('HTTP ' + response.status + ' · ' + text.slice(0, 120))
+      const controller = typeof AbortController === 'function' ? new AbortController() : null
+      const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : 0
       try {
-        return JSON.parse(text)
-      } catch {
-        // 落到 SPA fallback 会拿回 HTML —— 这里把证据留着，便于下次一眼定位
-        throw new Error('返回的不是 JSON：' + text.slice(0, 80).replace(/\s+/g, ' '))
+        const response = await fetch('/chronicle/api/' + path + qs, {
+          headers: { accept: 'application/json' },
+          // 没有超时的话，请求悬挂会让面板永久停在「读取中…」（面板补审 P0-1）
+          signal: controller ? controller.signal : undefined,
+        })
+        const text = await response.text()
+        if (!response.ok) throw new Error('HTTP ' + response.status + ' · ' + text.slice(0, 120))
+        try {
+          return JSON.parse(text)
+        } catch {
+          // 落到 SPA fallback 会拿回 HTML —— 这里把证据留着，便于下次一眼定位
+          throw new Error('返回的不是 JSON：' + text.slice(0, 80).replace(/\s+/g, ' '))
+        }
+      } catch (error) {
+        if (error && error.name === 'AbortError') throw new Error('请求超时（' + timeoutMs + 'ms）：' + path)
+        throw error
+      } finally {
+        if (timer) clearTimeout(timer)
       }
     }
 
@@ -521,11 +535,14 @@ window.__ModuleLoader__.load({
           if (!running) return
           sim.step()
           count += 1
-          if (count % 2 === 0) setFrame((value) => value + 1)
+          // 每 4 帧刷一次（原来 2 帧 ≈99 次全量 SVG 重建）
+          if (count % 4 === 0) setFrame((value) => value + 1)
           // 关键修复（审计 P2-15）：原来 140 帧后**永久停掉**，
           // 于是 reheat() 无人消费 —— 拖拽只写 point.x/y，其它节点与连边完全不响应。
           // 现在上限变成"连续无活动 140 帧"，reheat 会重新点亮循环。
-          if (count < 140 || sim.alpha > 0.05) handle = requestAnimationFrame(tick)
+          // 原来 `count < 140 || alpha > 0.05` 的「或」让 140 帧永远不成立（alpha 收敛要 ~198 步）；
+          // 改成「两个条件都要满足」，并在 alpha 收敛后立刻停（面板补审 P1-3）。
+          if (count < 200 && sim.alpha > 0.05) handle = requestAnimationFrame(tick)
           else setFrame((value) => value + 1)
         }
         handle = requestAnimationFrame(tick)
@@ -1067,6 +1084,134 @@ window.__ModuleLoader__.load({
       return nodes
     }
 
+    /** 未输入关键词时，别把「还没搜」说成「搜不到」（面板补审 P2）。 */
+    function nextQueryHint(viewName, queryText) {
+      const typed = String(queryText || '').trim()
+      if ((viewName === 'search' || viewName === 'related') && !typed) {
+        return viewName === 'search' ? '在上面的框里输入关键词后回车。' : '在上面的框里输入一个实体名后回车。'
+      }
+      return T2('emptySearch')
+    }
+
+    /** 检索结果行：保留检索顺序，并把相关性分数显示出来（面板补审 P0-2）。 */
+    function SearchRow({ entry }) {
+      const title = String((entry && entry.title) || '(无标题)')
+      const claim = String((entry && (entry.claim || entry.statement)) || '')
+      const day = String((entry && entry.day) || '')
+      const score = entry && typeof entry.score === 'number' ? entry.score : null
+      return h(
+        'div',
+        { style: { padding: '8px 12px', borderBottom: '1px solid ' + T.line } },
+        h(
+          'div',
+          { style: { display: 'flex', gap: 8, alignItems: 'baseline' } },
+          score !== null
+            ? h('span', { style: { color: T.accent, fontSize: 11, fontVariantNumeric: 'tabular-nums' } }, score.toFixed(2))
+            : null,
+          h('span', { style: { color: T.fg, fontSize: 12, fontWeight: 600, flex: 1 } }, title),
+          day ? h('span', { style: { color: T.faint, fontSize: 11 } }, day) : null,
+        ),
+        claim
+          ? h(
+              'div',
+              { style: { color: T.dim, fontSize: 11, lineHeight: 1.55, marginTop: 2 } },
+              claim.length > 160 ? claim.slice(0, 160) + '…' : claim,
+            )
+          : null,
+      )
+    }
+
+    /**
+     * 近 7 天摘要：一段可直接复制的文字。
+     * C2 冻结纪传体后，用这块补面板首屏（0 新 API，只用 recent 已返回的 dayList）。
+     */
+    function weekDigestText(dayList) {
+      const list = Array.isArray(dayList) ? dayList : []
+      if (list.length === 0) return ''
+      const countOf = (day) =>
+        Number(day.count) || (Array.isArray(day.entries) ? day.entries.length : 0) || 0
+      const total = list.reduce((sum, day) => sum + countOf(day), 0)
+      const lines = ['近 ' + list.length + ' 天 · 共 ' + total + ' 条记录']
+      for (const day of list) {
+        lines.push('', String(day.day || '') + '（' + countOf(day) + ' 条）')
+        const summary = String(day.summary || '').trim()
+        if (summary) lines.push(summary.length > 120 ? summary.slice(0, 120) + '…' : summary)
+        const tops = (Array.isArray(day.entries) ? day.entries : [])
+          .slice()
+          .sort((a, b) => (Number(b.importance) || 1) - (Number(a.importance) || 1))
+          .slice(0, 3)
+        for (const entry of tops) lines.push('- ★' + (entry.importance || 1) + ' ' + (entry.title || ''))
+      }
+      return lines.join('\n')
+    }
+
+    function WeekDigest({ dayList }) {
+      const [copied, setCopied] = useState('')
+      const text = weekDigestText(dayList)
+      if (!text) return null
+      const copy = () => {
+        try {
+          const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : null
+          if (clipboard && typeof clipboard.writeText === 'function') {
+            clipboard.writeText(text).then(
+              () => setCopied('ok'),
+              () => setCopied('fail'),
+            )
+          } else setCopied('fail')
+        } catch {
+          setCopied('fail')
+        }
+      }
+      return h(
+        'div',
+        {
+          style: {
+            margin: '10px 12px 4px',
+            padding: 10,
+            border: '1px solid ' + T.line,
+            borderRadius: 8,
+          },
+        },
+        h(
+          'div',
+          { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 } },
+          h('strong', { style: { color: T.fg, fontSize: 12 } }, '近 7 天摘要'),
+          h(
+            'button',
+            {
+              type: 'button',
+              onClick: copy,
+              style: {
+                padding: '2px 10px',
+                borderRadius: 6,
+                border: '1px solid ' + T.line,
+                background: 'transparent',
+                color: T.dim,
+                fontSize: 11,
+                cursor: 'pointer',
+              },
+            },
+            copied === 'ok' ? '已复制' : copied === 'fail' ? '复制失败' : '复制',
+          ),
+        ),
+        h(
+          'pre',
+          {
+            style: {
+              margin: 0,
+              whiteSpace: 'pre-wrap',
+              fontSize: 11,
+              lineHeight: 1.55,
+              color: T.dim,
+              maxHeight: 220,
+              overflow: 'auto',
+            },
+          },
+          text,
+        ),
+      )
+    }
+
     function Panel() {
       const [view, setView] = useState('recent')
       const [query, setQuery] = useState('')
@@ -1084,14 +1229,24 @@ window.__ModuleLoader__.load({
         }
         sync()
         if (typeof service.subscribe !== 'function') return
-        return service.subscribe(sync)
+        const off = service.subscribe(sync)
+        // 宿主返回的卸载句柄形状未经核实（client inspect 10s 超时），三种都兜住：
+        if (typeof off === 'function') return off
+        if (off && typeof off.dispose === 'function') return () => off.dispose()
+        return undefined
       }, [])
-      // 渲染期把语言同步给 T2（模块级），这样同一趟渲染里取到的就是对的
-      currentLocale = resolveLocale(state.summary && state.summary.uiLocale, hostLocale)
+      // 语言同步给 T2（模块级）。仍然在渲染期写，但用 useMemo 收敛为「locale 变了才写」，
+      // 减少并发渲染/丢弃渲染带来的撕裂（完全纯净需要把 locale 当参数逐层传，留作后续）。
+      const resolvedLocale = resolveLocale(state.summary && state.summary.uiLocale, hostLocale)
+      useMemo(() => {
+        currentLocale = resolvedLocale
+      }, [resolvedLocale])
       // 从「事实 / 线索」点进图谱时记住要聚焦哪个节点
       const [focus, setFocus] = useState('')
       // 从图谱点进「事实」时高亮那一条
       const [highlight, setHighlight] = useState('')
+      // 重试计数：错误态点「重试」或重复点当前标签时 +1，触发重新 load（面板补审 P0-1）
+      const [retryTick, setRetryTick] = useState(0)
       const seq = useRef(0)
       // 渲染期同步语言：state.summary.uiLocale 由宿主下发。
       // 不能只在 load() 里 setLocale —— 重渲染时（比如切视图）就拿不到了。
@@ -1124,10 +1279,10 @@ window.__ModuleLoader__.load({
         try {
           const summary = await call('summary')
           let entries = []
-          let view2 = nextView
           let dayList = []
           if (nextView === 'recent') {
-            const data = await call('recent', { days: '7', limit: '50' })
+            // 50 条在忙碌的一周只覆盖最近 1–2 天，其余天会从时间轴里整块消失（面板补审 P1-4）
+            const data = await call('recent', { days: '7', limit: '200' })
             entries = data.entries || []
             // 时间轴：按天分块，每块带当天日结（原来是平铺，跨天混成一锅）
             dayList = data.dayList || []
@@ -1150,7 +1305,7 @@ window.__ModuleLoader__.load({
           if (mine !== seq.current) return
           // 宿主下发的界面语言优先于自动检测（'auto' 时保持检测结果）
           if (summary && typeof summary.uiLocale === 'string' && summary.uiLocale !== 'auto') setLocale(summary.uiLocale)
-          setState({ loading: false, error: '', entries, summary, view: view2, dayList })
+          setState({ loading: false, error: '', entries, summary, dayList })
         } catch (error) {
           if (mine !== seq.current) return
           setState({ loading: false, error: String((error && error.message) || error), entries: [], summary: null })
@@ -1159,7 +1314,7 @@ window.__ModuleLoader__.load({
 
       useEffect(() => {
         void load(view, query)
-      }, [view, load])
+      }, [view, load, retryTick])
 
       const submit = useCallback(
         (event) => {
@@ -1210,7 +1365,10 @@ window.__ModuleLoader__.load({
               {
                 key,
                 type: 'button',
-                onClick: () => setView(key),
+                onClick: () => {
+                  if (key === view) setRetryTick((value) => value + 1)
+                  else setView(key)
+                },
                 style: {
                   padding: '3px 10px',
                   fontSize: 12,
@@ -1292,6 +1450,25 @@ window.__ModuleLoader__.load({
                   { style: { color: T.dim, fontSize: 12, padding: 12, lineHeight: 1.6 } },
                   '读不到数据：',
                   h('code', { style: { fontSize: 11, wordBreak: 'break-all' } }, state.error),
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      onClick: () => setRetryTick((value) => value + 1),
+                      style: {
+                        display: 'block',
+                        marginTop: 8,
+                        padding: '4px 12px',
+                        borderRadius: 6,
+                        border: '1px solid ' + T.line,
+                        background: 'transparent',
+                        color: T.ink,
+                        fontSize: 12,
+                        cursor: 'pointer',
+                      },
+                    },
+                    '重试',
+                  ),
                 )
               : state.entries.length === 0
                 ? h(
@@ -1305,7 +1482,7 @@ window.__ModuleLoader__.load({
                           ? T2('emptyArcs')
                           : view === 'graph'
                             ? T2('emptyGraph')
-                          : '没命中。换个词，或先收口几天。',
+                          : nextQueryHint(view, query),
                   )
                 : view === 'facts'
                   ? state.entries.map((fact) => h(FactRow, { key: fact.id, fact, onSelect: focusOn, highlight }))
@@ -1328,7 +1505,20 @@ window.__ModuleLoader__.load({
                           }),
                           h(ArcSpans, { data: state.entries[0]?.viz?.arcs, axis: state.entries[0]?.viz?.daily }),
                         )
-                    : renderTimeline(state.dayList, state.entries),
+                    : view === 'search' || view === 'related'
+                      ? h(
+                          'div',
+                          null,
+                          state.entries.map((entry, index) =>
+                            h(SearchRow, { key: (entry && (entry.ref || entry.id || entry.title)) || index, entry }),
+                          ),
+                        )
+                      : h(
+                          'div',
+                          null,
+                          h(WeekDigest, { dayList: state.dayList }),
+                          renderTimeline(state.dayList, state.entries),
+                        ),
         ),
       )
     }

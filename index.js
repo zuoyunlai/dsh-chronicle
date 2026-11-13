@@ -77,7 +77,7 @@ export const inject = ['tools']
 /** 当前实现阶段。 */
 export const PHASE = 'P6'
 
-const VERSION = '2.5.0'
+const VERSION = '2.5.1'
 
 /** 每攒多少条事件就落一次盘。 */
 const FLUSH_EVENTS = 20
