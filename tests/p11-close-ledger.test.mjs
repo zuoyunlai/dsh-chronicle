@@ -114,3 +114,22 @@ test('重复收口同一天不产生重复条目', () => {
   assert.deepEqual(s.closedDays, ['2026-11-13'])
   assert.equal(s.closedStamps['2026-11-13'], 2, '戳要跟着最新一次收口更新')
 })
+
+test('收口历史某天不得把「还没过完的今天」写进周文件（2026-11-13 复跑发现）', async () => {
+  const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { daysOfWeek } = await import('../lib/close.js')
+  const dir = await mkdtemp(join(tmpdir(), 'chronicle-week-'))
+  try {
+    await mkdir(join(dir, 'events'), { recursive: true })
+    for (const day of ['2026-11-09', '2026-11-10', '2026-11-11', '2026-11-12', '2026-11-13']) {
+      await writeFile(join(dir, 'events', `${day}.jsonl`), '')
+    }
+    const days = await daysOfWeek(dir, '2026-W46', '2026-11-12')
+    assert.deepEqual(days, ['2026-11-09', '2026-11-10', '2026-11-11', '2026-11-12'])
+    assert.ok(!days.includes('2026-11-13'), '今天还没过完，不能被收进去')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
