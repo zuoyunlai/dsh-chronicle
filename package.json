@@ -1,7 +1,7 @@
 {
   "name": "dsh-chronicle",
-  "version": "2.4.2",
-  "description": "起居注：把 DeepSeek Harness 里的对话收口成可审、可检索、可关联的 Markdown 编年史 + 事实库。零第三方依赖，产物是 Obsidian 可直接打开的独立 vault。",
+  "version": "2.5.0",
+  "description": "起居注：把 DeepSeek Harness 里每天的会话收口成可审、可回溯、可带走的 Markdown 决策台账 + 编年史（不是记忆系统）。零第三方依赖，产物是 Obsidian 可直接打开的独立 vault。",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -101,9 +101,10 @@
     "dsh",
     "dsh-plugin",
     "deepseek-harness",
-    "journal",
     "chronicle",
-    "memory",
+    "journal",
+    "audit-log",
+    "decision-log",
     "markdown",
     "obsidian"
   ],

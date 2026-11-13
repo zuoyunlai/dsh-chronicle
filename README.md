@@ -11,11 +11,14 @@
 
 # 起居注 · dsh-chronicle
 
-每天把你用 DeepSeek Harness 做的事，按重要性收口成一份**可审的 Markdown 编年史**：跨会话、带证据、可检索、可关联。
+每天把你用 DeepSeek Harness 做的事，按重要性收口成一份**可审的决策台账 + Markdown 编年史**：跨会话、带证据、可回溯、可带走。
+
+> **它是什么**：一份替你回答「三个月后还能查出那天为什么那么定」的账本，外加每周一段能直接贴出去的话。
+> **它不是什么**：不是语义记忆系统，不做向量检索，不替你「记住偏好」——那是 mnemon / OpenViking 的地盘。
 
 产物是一个独立的 Obsidian vault，**零第三方依赖**——`dependencies` 为空，只声明宿主自带的 `@deepseek-ai/*`。
 
-> **状态：v2.4.2**（P6）
+> **状态：v2.5.0**（定位改为「可审的决策台账 + 编年史」）
 > 采集 → 回捞 → 纲要 → 规则/LLM 打分 → **日结 + 七块** → 周文件 → 按天时间轴 → 实体图与实体页 → 事实库 → 跨天线索 → 规则导出 → 右侧栏面板。
 > 210 条测试全绿。
 
@@ -23,15 +26,16 @@
 
 ## 它解决什么
 
-- **反复解释同一件事**：上一轮敲定的方案、踩过的坑、否掉的路线，下一轮全都不在了。
-- **记忆插件记不住「那天到底怎么了」**：写入式记忆没有「这条结论是哪天、从哪次对话得出的」这条链。
-- **日报工具只有流水账**：不排序、不带证据、不可回溯。
+- **「那天为什么那么定」查不出来**：对话翻不回去，提交记录只说改了什么、不说为什么。
+- **写入式记忆没有证据链**：它只存结论，不存「哪天、哪次对话、哪一轮」得出的；审计需要后者。
+- **日报工具只有流水账**：不排序、不带证据、不可回溯、导不出去。
 
 ## 它明确不做
 
 - 不做向量语义检索、不做全量历史回填
-- 不替代实时工作记忆（那是 mnemon / OpenViking 的地盘，本插件常驻只占一行 ≤80 token）
+- 不替代实时工作记忆（mnemon / OpenViking 的地盘）
 - 不 push 任何代码；`gitCommit` 只做本地提交
+- **不做「会自己学你」的记忆**：本插件不假设自己比你的笔记更懂你
 
 ---
 
@@ -40,7 +44,7 @@
 | 层 | 目录 | 内容 |
 |---|---|---|
 | **编年体** | `chronicle/2026-W46.md` | 按周一个文件。每天一块：**日结 + 项目进展 / 结论与决策 / 约定与口径 / 坑与根因 / 被否方案 / 未答问题 / 其余进展** |
-| **纪传体** | `entities/`、`graph/` | 实体页与共现图。面板「图谱」视图是它的可视化 |
+| **纪传体**（已冻结） | `entities/`、`graph/` | 实体页与共现图。面板「图谱」保留只读可视化，**不再新投资**——实测 28 个实体页里 20 个是源码文件名，信息增益低于维护成本 |
 | **纪事本末体** | `facts/`、`MEMORY.md` | **不随日期过期**的原子结论：决策 / 约定 / 坑 / 被否方案 / 未答问题。`MEMORY.md` 是索引，先读它再决定打开哪一篇 |
 
 ### 事实层的两个分区
@@ -82,11 +86,11 @@ dsh plugin --profile <你的 profile> add dsh-chronicle
 | `chronicle_close` | 立刻收口某天（`scoring` 可单次覆盖 rule/llm，`dryRun` 只预览） |
 | `chronicle_doctor` | 日志体检：行数、重复键、坏行、思考污染、丢弃计数 |
 | `chronicle_today` | 取某天的记录，按重要度降序 |
-| `chronicle_search` | 跨天检索（实体命中 + 图 2 跳 + IDF 词频 + 60 天半衰期） |
+| `chronicle_search` | 跨天检索（实体名精确 + IDF 词频 + 单位字回退；图 2 跳与半衰期已砍） |
 | `chronicle_related` | 给一个实体，返回图邻居与相关记录 |
 | `chronicle_facts` | 事实库列举（可按 kind / project / q / scope 过滤） |
 | `chronicle_review` | 该复核的旧结论（单次得出且久未复现，或带重评条件） |
-| `chronicle_export_rules` | 把约定 / 失效条件 / 判别信号导出成可粘的规则 |
+| `chronicle_export_rules` | 导出可粘进 `AGENTS.md` 的规则段（带 begin/end 标记），并报「相对上次 +N/−M」 |
 | `chronicle_capsule` | 时间胶囊：给未来的自己留一句话 |
 
 ## 面板
@@ -156,7 +160,7 @@ dsh plugin --profile <你的 profile> add dsh-chronicle
 
 ## 配置
 
-21 项，在「设置 → 插件 → 起居注」里改。常用的：
+19 项，在「设置 → 插件 → 起居注」里改。常用的：
 
 | 键 | 默认 | 说明 |
 |---|---|---|
@@ -165,15 +169,13 @@ dsh plugin --profile <你的 profile> add dsh-chronicle
 | `tickMinutes` | `5` | 轮询间隔。只判断「该不该收口」 |
 | `importanceFloor` | `3` | 低于这个星级折叠进附录 |
 | `scoring` | `rule` | `rule` 不调模型但没有日结；`llm` 才有日结 |
-| `followModel` | `true` | 打分跟随当前选中模型 |
-| `scoringModel` | 空 | 固定打分模型，形如 `provider/model`；仅 `followModel=false` 时生效 |
 | `gitCommit` | `true` | 收口后对 vault 做本地 commit（**只 commit 不 push**） |
 | `injectLine` | `true` | 是否注入那一行摘要 |
 | `injectBudget` | `80` | 注入行的**字符**上限（含 `[chronicle]` 前缀） |
 | `llmTimeout` | `120` | LLM 打分超时（秒）；超时退回规则分，不会卡住收口 |
 | `redact` | `true` | 落盘前脱敏凭据 |
 | `maxEventsPerDay` | `5000` | 单日事件上限，超出会计数并报出 |
-| `entityRule` | `on-hit` | 实体页门槛：`on-hit` / `score` / `always` |
+| `entityRule` | `off` | 实体页门槛，默认冻结；`on-hit` / `score` / `always` 可恢复 |
 | `uiLocale` | `auto` | 面板语言：`auto` / `zh` / `en` |
 | `weekFile` | `true` | 按周一个文件；关掉退回按天（一年 365 个文件会拖垮 Obsidian） |
 | `includeSubagent` | `false` | 是否收录子代理会话 |
@@ -256,7 +258,10 @@ rm -rf ~/.dsh/dsh-chronicle ~/dsh-chronicle-vault
 - **重收**：某天已收口后，若后台回捞又补进了那天的旧会话，事件文件会更新，
   下次 tick 自动重收，并在 ping 的 `revisited` 里列出。
 - **规则导出**：按 `project` 分节（通用条目排最前），可用 `project` 参数只导出某个项目的规则。
-- **面板检索不记命中**：面板是只读面，GET 不带写盘副作用。命中计数只由 `chronicle_search` 累加。
+- **命中计数**：`hits` 来自两处——`chronicle_search` 的检索命中，以及**注入行被送进上下文的次数**
+  （按 tick 窗口去重后落盘）。面板检索仍不记命中（只读面，GET 不带写盘副作用）。
+- **只记失败的工具正文**：成功的工具结果不写事件行（实测 5,993 条里没有一条被产物引用）；
+  失败的连正文一起留（截断 400 字），`chronicle_doctor` 会直接报「那天为什么失败」。
 - **跨宿主版本**：`plugin_doctor` 的 X1（peer 走廊）用的是过期基线，实测宿主 0.2.2-rc.1 满足 `^0.2.1-rc.1`，**不需要改**。
   `dsh.client.inject` 里的 `@deepseek-ai/dsh-client-ui-slots` 是宿主运行时提供的逻辑模块（不是 npm 包），
   `dsh-better-sidebar` / `dsh-rightbar-quicknav` 同样这么声明，**不要删**。

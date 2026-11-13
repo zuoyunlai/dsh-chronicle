@@ -45,7 +45,7 @@ test('检索：实体精确命中压过纯关键词', () => {
   assert.ok(results[0].entityHits >= 1)
 })
 
-test('检索：图 2 跳能把没直接点名的记录带出来', () => {
+test('检索（C1 简化后）：只靠词面与实体名，不再用图 2 跳把无关条目带出来', () => {
   const entries = [
     entry({ ref: 'a', entities: ['dsh-chronicle'] }),
     entry({ ref: 'b', title: '改 llm.js', claim: '和 chronicle 一起改的', entities: ['llm.js'] }),
@@ -53,9 +53,10 @@ test('检索：图 2 跳能把没直接点名的记录带出来', () => {
   const edges = [{ a: 'dsh-chronicle', b: 'llm.js', weight: 3 }]
   const results = searchEntries(entries, 'dsh-chronicle', { edges, now: NOW })
   const refs = results.map((r) => r.ref)
-  assert.ok(refs.includes('b'), '2 跳扩散应把 llm.js 那条带出来')
-  const b = results.find((r) => r.ref === 'b')
-  assert.ok(b.hopHit > 0)
+  // a 的实体名直接命中；b 因为正文里出现了「chronicle」子串，靠单字回退捞回，
+  // 但**不是**靠图扩散——所以 hopHit 必须恒为 0（2026-11-13 产品反哺 C1）。
+  assert.ok(refs.includes('a'))
+  for (const r of results) assert.equal(r.hopHit, 0)
 })
 
 test('检索：空查询与全不命中都返回空', () => {

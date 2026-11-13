@@ -129,3 +129,39 @@ test('P2 体检：把「今天/累计」与台账缺口说清楚，不再用累�
   assert.match(text, /待收口 1 天：2026-11-12（其中重收 2026-11-12）/)
   assert.match(text, /evidenceStale 21 条，其中 2 条没有任何缺失 ref/)
 })
+
+/* ---------- D3：注入行重写（2026-11-13 产品反哺） ---------- */
+
+test('D3 一行一条：有判别信号的坑优先于约定，且不拼接第二条', () => {
+  const facts = [
+    { id: 'c1', kind: 'convention', scope: 'general', project: 'p', status: 'single', bornOn: '2026-11-13', title: '空态文案统一口径', statement: '同一卡片内多张表文案保持一致' },
+    { id: 'd1', kind: 'decision', scope: 'general', project: 'p', status: 'single', bornOn: '2026-11-12', title: '部署与依赖双约束', expiresWhen: '部署架构变化时重评' },
+    { id: 'p1', kind: 'pitfall', scope: 'general', project: 'p', status: 'single', bornOn: '2026-11-11', title: '安全头 HEAD 假阴性', detector: '看到接口探测结果为 0 时' },
+  ]
+  const line = buildInjectLine({ facts, budgetChars: 140, onPick: (f) => { picked = f } })
+  let picked
+  const line2 = buildInjectLine({ facts, budgetChars: 140, onPick: (f) => { picked = f } })
+  void line2
+  assert.match(line, /安全头 HEAD 假阴性/, '应优先注入带 detector 的坑')
+  assert.doesNotMatch(line, /同一卡片内多张表文案保持一致/, '不能拼接第二条')
+  assert.equal(picked && picked.id, 'p1')
+})
+
+test('D3 按标点断句：超预算时不切在词中间', () => {
+  const long = '这是一条很长的约定正文，用来把注入行撑到超过预算，并且确保断句点出现在标点处而不是任意字符位置，否则读起来会像乱码。'.repeat(2)
+  const facts = [{ id: 'c1', kind: 'convention', scope: 'general', project: 'p', status: 'single', bornOn: '2026-11-13', title: '长条目', statement: long }]
+  const line = buildInjectLine({ facts, budgetChars: 80 })
+  assert.ok(line.length <= 80, `长度 ${line.length} 超出 80`)
+  assert.ok(line.endsWith('…'))
+  // 断点前必须是标点（或整句），不能是半个词
+  assert.match(line, /[。；，、）】」]…$|…$/)
+  assert.doesNotMatch(line, /[a-zA-Z]{1}…$/)
+})
+
+test('D3 默认预算 140（旧值 80 会把两段都切断）', () => {
+  const body = '一条足够长的约定正文，'.repeat(12)
+  const facts = [{ id: 'c1', kind: 'convention', scope: 'general', project: 'p', status: 'single', bornOn: '2026-11-13', title: 'T', statement: body }]
+  const line = buildInjectLine({ facts })
+  assert.ok(line.length <= 140)
+  assert.ok(line.length > 40, '默认预算不该退回到 80 那么紧')
+})

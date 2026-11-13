@@ -25,7 +25,7 @@ import { createChronicleApi, registerChronicleRoutes } from './lib/api.js'
 import { backfillDay, withTimeout } from './lib/backfill.js'
 import { readFacts, bumpFactHits } from './lib/facts.js'
 import { bumpEntityHits } from './lib/entitypages.js'
-import { reviewCandidates, renderRulesMarkdown } from './lib/rules.js'
+import { reviewCandidates, renderRulesMarkdown, diffExport } from './lib/rules.js'
 import { readArcs } from './lib/arcs.js'
 import { buildViz } from './lib/viz.js'
 import { neighborsOf, loadGraph, attachFactNodes } from './lib/entities.js'
@@ -41,6 +41,7 @@ import {
   readMaybe,
   eventDayStamps,
   pruneEventDays,
+  ensureDir,
 } from './lib/store.js'
 import { createSerializer } from './lib/serialize.js'
 import { TOOL_SCHEMAS } from './lib/schemas.js'
@@ -76,7 +77,7 @@ export const inject = ['tools']
 /** 当前实现阶段。 */
 export const PHASE = 'P6'
 
-const VERSION = '2.4.2'
+const VERSION = '2.5.0'
 
 /** 每攒多少条事件就落一次盘。 */
 const FLUSH_EVENTS = 20
@@ -105,12 +106,6 @@ export const Config = Schema
       includeSubagent: Schema.boolean()
         .default(false)
         .description('是否收录子代理会话。默认不收，子代理的流水会把日报淹没。'),
-      followModel: Schema.boolean()
-        .default(true)
-        .description('打分跟随当前选中模型（P2 起生效）。'),
-      scoringModel: Schema.string()
-        .default('')
-        .description('固定打分模型，形如 provider/model。仅 followModel=false 时生效。'),
       importanceFloor: Schema.number()
         .min(1)
         .max(5)
@@ -122,8 +117,8 @@ export const Config = Schema
       injectBudget: Schema.number()
         .min(0)
         .max(400)
-        .default(80)
-        .description('注入行字符上限（含 [chronicle] 前缀；默认 80 字符）。'),
+        .default(140)
+        .description('注入行的字符上限（含 [chronicle] 前缀）。注入规则是**一行一条事实**，不拼接。'),
       redact: Schema.boolean()
         .default(true)
         .description('写入磁盘前脱敏（密钥 / 令牌 / 私钥块 / 手机号 / 身份证 / 邮箱）。强烈建议不要关。'),
@@ -139,8 +134,12 @@ export const Config = Schema
         .default(true)
         .description('生成后自动 git commit（只本地，绝不 push）。vault 必须是独立仓库。'),
       entityRule: Schema.string()
-        .default('on-hit')
-        .description('实体页建立门槛：on-hit = 被召回命中过一次；score = ★≥entityMinScore。'),
+        .default('off')
+        .description(
+          '实体页门槛。默认 off = 冻结（2026-11-13 产品反哺：28 个实体页里 20 个是源码文件名，' +
+            '信息增益低于维护成本；图谱仍照写、面板可视化不受影响）。' +
+            'on-hit = 被召回命中过一次；score = ★≥entityMinScore；always = 全建。',
+        ),
       scoring: Schema.string()
         .default('rule')
         .description('打分档位：rule = 纯规则（零成本、永远可用）；llm = 让当前模型整理一天（更准，花一次调用，失败自动退回 rule）。'),
@@ -393,6 +392,16 @@ export function apply(ctx, config) {
     if (closing) return
     try {
       await flushNow()
+      // 注入记账落盘（D3）：只在 tick/收口这种低频点写，绝不在每次组装提示词时写盘
+      if (pendingInjectRefs.size > 0) {
+        const refs = [...pendingInjectRefs]
+        pendingInjectRefs.clear()
+        try {
+          await bumpFactHits(dataDir, refs, vaultDir)
+        } catch {
+          /* 记账失败不影响收口 */
+        }
+      }
       const s = await getState()
       const now = Date.now()
       const days = await listEventDays(dataDir)
@@ -457,16 +466,16 @@ export function apply(ctx, config) {
   }
 
   /** 挑这次打分用哪个模型：配置里写死的 > 跟随当前选中。 */
+  /**
+   * 打分模型：**永远跟随当前选中的模型**（C3，2026-11-13 产品反哺）。
+   *
+   * 原来有 followModel + scoringModel 两个旋钮：单人自用产品里这是纯自维护成本，
+   * 而且两个旋钮组合出「同一天两次收口结果不同」的可能，直接损伤「可审」这个唯一卖点。
+   * 想换模型就在宿主里换当前模型。
+   */
   function scoringTarget() {
-    const pinned = String(config.scoringModel || '').trim()
-    if (pinned.includes('/')) {
-      const [provider, model] = pinned.split('/')
-      if (provider && model) return { provider, model }
-    }
-    if (config.followModel) {
-      const selection = currentModel()
-      if (selection) return { provider: selection.provider, model: selection.model }
-    }
+    const selection = currentModel()
+    if (selection) return { provider: selection.provider, model: selection.model }
     return null
   }
 
@@ -493,7 +502,7 @@ export function apply(ctx, config) {
       }
       const target = scoringTarget()
       if (!target) {
-        llmError = '没有可用模型（followModel 解析不到当前选择）'
+        llmError = '没有可用模型（解析不到当前选择）'
         return []
       }
       try {
@@ -841,12 +850,18 @@ export function apply(ctx, config) {
 
   let corpus = { entries: [], edges: [], loadedAt: 0 }
   let injectText = ''
+  // 当前注入行对应的证据 ref + 待记账集合。
+  // 为什么要在注入侧记账（2026-11-13 产品反哺 D3）：hits 原来只来自 chronicle_search，
+  // 全期 3 次 ⇒ 「注入到底有没有用」永远不可测。现在「被注入过」也进 hits（按 tick 窗口去重）。
+  let injectRefs = []
+  const pendingInjectRefs = new Set()
 
   async function refreshCorpus() {
     try {
       const entries = await loadEntries(dataDir)
       const edges = await loadEdges(dataDir)
       corpus = { entries, edges, loadedAt: Date.now() }
+      injectRefs = []
       injectText = config.injectLine
         ? buildInjectLine({
             entries,
@@ -856,6 +871,9 @@ export function apply(ctx, config) {
             budgetChars: Math.max(20, config.injectBudget),
             // 让注入行与「最近在做的事」相关：取语料里最新条目的项目
             focusProject: entries.length > 0 ? String(entries[entries.length - 1].project || '') : '',
+            onPick: (fact) => {
+              injectRefs = Array.isArray(fact.evidence) ? fact.evidence.slice(0, 4) : []
+            },
           })
         : ''
     } catch {
@@ -879,7 +897,11 @@ export function apply(ctx, config) {
         return service.context({
           name: 'chronicle-hint',
           order: 900,
-          text: () => injectText,
+          // 每次组装提示词都记一次「这条被注入过」（Set 去重，tick 时统一落盘）
+          text: () => {
+            if (injectText) for (const ref of injectRefs) pendingInjectRefs.add(ref)
+            return injectText
+          },
         })
       }),
     )
@@ -1147,14 +1169,14 @@ export function apply(ctx, config) {
       name: 'chronicle_facts',
       description:
         '起居注事实库：列出不随日期过期的结论。可按 kind（decision/convention/pitfall/rejected/question）与项目过滤，' +
-        '返回 title/status/hits 与事实 id。想读全文直接看 vault/facts/<id>.md（面板「事实」页也能展开）。',
+        '返回 title/status/hits 与条目 id。想读全文直接看 vault/facts/<id>.md（面板「事实」页也能展开）。',
       parameters: {
         type: 'object',
         properties: {
           kind: { type: 'string', description: 'decision | convention | pitfall | rejected | question' },
           project: { type: 'string', description: '项目名过滤' },
           q: { type: 'string', description: '关键词过滤（标题/结论/依据）' },
-          scope: { type: 'string', description: 'general = 只看工作记忆；tool-self = 只看工具自身笔记；省略 = 全部' },
+          scope: { type: 'string', description: 'general = 只看工作台账；tool-self = 只看工具自身笔记；省略 = 全部' },
           limit: { type: 'number', description: '最多几条，默认 20' },
         },
         additionalProperties: false,
@@ -1196,7 +1218,7 @@ export function apply(ctx, config) {
       name: 'chronicle_review',
       description:
         '起居注：列出**该复核的旧结论**——单次得出且超过两周未复现的，或带「何时重评」条件的。' +
-        '用于定期检查记忆是否过期。',
+        '用于定期检查台账条目是否过期。',
       parameters: {
         type: 'object',
         properties: {
@@ -1242,12 +1264,16 @@ export function apply(ctx, config) {
       output: {
         schema: TOOL_SCHEMAS.chronicle_export_rules,
         render(_args, value) {
-          return [
-            {
-              type: 'text',
-              text: value.path ? `已写出 ${value.lines} 行规则 → ${value.path}\n\n${value.markdown}` : value.markdown,
-            },
-          ]
+          const delta = value.first
+            ? '首次导出（无基线可比）'
+            : `相对上次：+${value.addedCount ?? 0} / -${value.removedCount ?? 0} 条`
+          const head = value.path
+            ? `已写出 ${value.lines} 行规则 → ${value.path} · ${delta}`
+            : `规则导出（未落盘）· ${delta}`
+          const changes =
+            (Array.isArray(value.added) && value.added.length > 0 ? `\n新增：\n${value.added.map((l) => '  ' + l).join('\n')}` : '') +
+            (Array.isArray(value.removed) && value.removed.length > 0 ? `\n移除：\n${value.removed.map((l) => '  ' + l).join('\n')}` : '')
+          return [{ type: 'text', text: `${head}${changes}\n\n${value.markdown}` }]
         },
       },
       async execute(args) {
@@ -1258,7 +1284,6 @@ export function apply(ctx, config) {
           project: typeof args?.project === 'string' ? args.project.trim() : '',
         })
         let path = ''
-        // write 默认开：闭环的产物必须真的落盘，否则「规则导出」只是屏幕上的字
         // write 默认关（opt-in）：工具描述写的就是「write=true 时落盘」，
         // 默认值必须与描述一致；否则一次纯查询会顺手改写 AGENTS.generated.md
         // 并被下次收口的 `git add -A` 一起提交（2026-11-13 审计 P2）。
@@ -1266,7 +1291,30 @@ export function apply(ctx, config) {
           path = join(vaultDir, 'AGENTS.generated.md')
           await writeAtomic(path, markdown)
         }
-        return { markdown, path, lines: markdown.split('\n').length }
+        // D1（2026-11-13 产品反哺）：导出要能看见「这次比上次多了/少了什么」。
+        // 基线放在 dataDir（私有数据，不进 git、不随 vault 一起提交），无论是否落盘都更新。
+        let diff = { added: [], removed: [], first: true }
+        try {
+          const basePath = join(dataDir, 'exports', 'rules-last.md')
+          const previous = (await readMaybe(basePath)) || ''
+          diff = diffExport(previous, markdown)
+          // 首次没有基线：不把「全新增」当成 diff 刷屏，只报 first
+          if (diff.first) diff.added = []
+          await ensureDir(join(dataDir, 'exports'))
+          await writeAtomic(basePath, markdown)
+        } catch {
+          /* 基线写失败不影响导出本身 */
+        }
+        return {
+          markdown,
+          path,
+          lines: markdown.split('\n').length,
+          addedCount: diff.added.length,
+          removedCount: diff.removed.length,
+          first: diff.first,
+          added: diff.added.slice(0, 8),
+          removed: diff.removed.slice(0, 8),
+        }
       },
     }),
   )
