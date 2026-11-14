@@ -133,3 +133,40 @@ test('收口历史某天不得把「还没过完的今天」写进周文件（20
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+/* ---------- 一次性戳迁移（2026-11-14，方案 A） ---------- */
+
+test('迁移：补全 / 跳过无事件文件的天 / 不覆盖已有戳 / 幂等', async () => {
+  const { migrateStamps } = await import('../lib/time.js')
+  const state = {
+    closedDays: ['2026-11-09', '2026-11-10', '2026-11-11', '2026-11-12'],
+    closedStamps: { '2026-11-12': 999 },
+  }
+  const dayStamps = { '2026-11-09': 100, '2026-11-10': 200, '2026-11-12': 888 }
+  const first = migrateStamps(state, { dayStamps, version: 1, at: 1000 })
+  assert.equal(first.alreadyDone, false)
+  assert.deepEqual(first.filled, ['2026-11-09', '2026-11-10'])
+  assert.deepEqual(first.skipped, ['2026-11-11'], '没有事件文件的天不造假戳')
+  assert.equal(state.closedStamps['2026-11-12'], 999, '已有戳不能被覆盖')
+  assert.equal(state.closedStamps['2026-11-09'], 100)
+  assert.equal(state.stampsMigration, 1)
+
+  const second = migrateStamps(state, { dayStamps, version: 1 })
+  assert.equal(second.alreadyDone, true)
+  assert.equal(second.changed, false)
+})
+
+test('迁移后：补过戳的天若事件再变，仍会进入重收（语义没被破坏）', async () => {
+  const { migrateStamps } = await import('../lib/time.js')
+  const state = { closedDays: ['2026-11-09'], closedStamps: {} }
+  migrateStamps(state, { dayStamps: { '2026-11-09': 100 }, version: 1 })
+  const r = settledDays({
+    now: Date.parse('2026-11-14T10:00:00+08:00'),
+    daysWithEvents: ['2026-11-09'],
+    closedDays: state.closedDays,
+    dayStamps: { '2026-11-09': 300 },
+    closedStamps: state.closedStamps,
+  })
+  assert.deepEqual(r.days, ['2026-11-09'])
+  assert.deepEqual(r.revisited, ['2026-11-09'])
+})

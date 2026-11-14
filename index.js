@@ -15,7 +15,7 @@ import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-import { dayKey, settledDays, weekId, applyCloseLedger } from './lib/time.js'
+import { dayKey, settledDays, weekId, applyCloseLedger, migrateStamps } from './lib/time.js'
 import { EventBuffer, prepareRow } from './lib/ingest.js'
 import { closeDay, previewDay } from './lib/close.js'
 import { scoreDayWithLlm } from './lib/llm.js'
@@ -77,7 +77,7 @@ export const inject = ['tools']
 /** 当前实现阶段。 */
 export const PHASE = 'P6'
 
-const VERSION = '2.5.1'
+const VERSION = '2.5.2'
 
 /** 每攒多少条事件就落一次盘。 */
 const FLUSH_EVENTS = 20
@@ -1371,6 +1371,18 @@ export function apply(ctx, config) {
           s.lastPruneAt = Date.now()
           await writeState(dataDir, s)
         }
+      } catch (error) {
+        lastError = String(error?.message || error).slice(0, 300)
+      }
+      if (disposed) return
+      // 一次性迁移（2026-11-14）：v2.4.2 之前手动收口不写 closedStamps，
+      // 导致 doctor 常年警告「已收口但没记事件时间戳 N 天」、且这些天永不重收。
+      // 语义 = 以当前事件文件内容作为收口基线；之后有追加仍会触发重收。
+      try {
+        const s = await getState()
+        const stamps = await eventDayStamps(dataDir)
+        const migrated = migrateStamps(s, { dayStamps: stamps, version: 1 })
+        if (migrated.changed) await writeState(dataDir, s)
       } catch (error) {
         lastError = String(error?.message || error).slice(0, 300)
       }

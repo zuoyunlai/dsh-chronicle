@@ -1,6 +1,6 @@
 {
   "name": "dsh-chronicle",
-  "version": "2.5.1",
+  "version": "2.5.2",
   "description": "起居注：把 DeepSeek Harness 里每天的会话收口成可审、可回溯、可带走的 Markdown 决策台账 + 编年史（不是记忆系统）。零第三方依赖，产物是 Obsidian 可直接打开的独立 vault。",
   "type": "module",
   "main": "index.js",
